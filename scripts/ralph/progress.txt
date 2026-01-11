@@ -1080,3 +1080,30 @@ Started: Sun 11 Jan 10:55:32 GMT 2026
   - Supporting both Enter and 's' keys improves discoverability - some users expect Enter, others look for letter keys
   - Headless mode as a separate code path keeps CI automation working while TUI becomes interactive
 ---
+
+## 2026-01-11 - ralph-tui-45r.46
+- What was implemented:
+  - BUG: TUI status unclear - can't tell if engine is running or what it's doing
+  - Added granular RalphStatus types: 'selecting' (picking next task) and 'executing' (running agent)
+  - Added new status indicators: ◐ for selecting, ⏵ for executing
+  - Header now shows current task ID and title when executing (e.g., "Executing#3 → task-id「Task Title」")
+  - ProgressDashboard shows "Working on:" row with task ID and title during execution
+  - Status labels are more descriptive: "Selecting next task...", "Agent running (task-id)"
+  - HeaderProps extended with currentTaskId, currentTaskTitle, currentIteration
+  - ProgressDashboardProps extended with currentTaskId, currentTaskTitle
+  - RunApp tracks currentTaskId and currentTaskTitle state, updating on task:selected, iteration:started events
+  - Clear task info on iteration:completed to show transition back to 'selecting' status
+  - Updated pause handling to work with new granular statuses (selecting/executing pause like running)
+- Files changed:
+  - src/tui/theme.ts (updated) - Added 'selecting', 'executing' to RalphStatus, new statusIndicators
+  - src/tui/types.ts (updated) - Added currentTaskId, currentTaskTitle, currentIteration to HeaderProps
+  - src/tui/components/Header.tsx (updated) - Show status label and current task info, truncateText helper
+  - src/tui/components/ProgressDashboard.tsx (updated) - Show "Working on:" row, updated status labels
+  - src/tui/components/RunApp.tsx (updated) - Track current task state, granular status transitions
+- **Learnings:**
+  - Granular status states (selecting vs executing) give users clear visibility into engine activity
+  - Showing task ID and title in multiple places (header, dashboard) reinforces what's happening
+  - Status transitions should be event-driven: engine:started → 'selecting', task:selected → 'executing'
+  - iteration:completed should clear task info and transition back to 'selecting' before next task
+  - The ◐ and ⏵ symbols provide visual distinction between different active states
+---
