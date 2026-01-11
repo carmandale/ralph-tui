@@ -374,3 +374,28 @@ Started: Sun 11 Jan 10:55:32 GMT 2026
   - Ctrl+C handling requires catching readline close errors gracefully
   - TypeScript union types need explicit handling in switch exhaustiveness checks
 ---
+
+## 2026-01-11 - ralph-tui-45r.10
+- What was implemented:
+  - Full BeadsBvTrackerPlugin extending BeadsTrackerPlugin for smart task selection
+  - detect(): Check for .beads/ directory, bd binary, and bv binary availability
+  - getNextTask(): Execute bv --robot-triage, filter for epic children, return highest scored task
+  - Parse JSON output for recommendations with scores, reasons, and breakdown metrics
+  - getTaskReasoning(): Expose bv's "why this task" reasoning to TUI
+  - getAllTaskReasoning(): Get all cached task reasoning from last triage
+  - getTasks(): Augment task list with bv scoring metadata (score, reasons, unblocks)
+  - Graceful fallback to beads-only behavior when bv unavailable
+  - Recipe support: --recipe actionable (no blockers) or high-impact (PageRank)
+  - Automatic triage refresh after completeTask() and updateTaskStatus()
+  - Score breakdown parsing: pagerank, betweenness, staleness, urgency, risk, etc.
+  - getTriageStats(): Quick reference stats (open, actionable, blocked counts)
+  - isBvAvailable(): Check if smart mode is active
+- Files changed:
+  - src/plugins/trackers/builtin/beads-bv.ts (updated from stub to full implementation)
+- **Learnings:**
+  - TypeScript private fields prevent subclass access - use protected or config object pattern
+  - bv --robot-triage provides comprehensive scoring in one call vs --robot-next for just top pick
+  - Caching triage output enables efficient getTaskReasoning() lookups without re-querying bv
+  - Graceful fallback pattern: check bvAvailable flag, call super.getNextTask() on any failure
+  - Async triage refresh with `void this.refreshTriage()` keeps CRUD operations fast
+---
