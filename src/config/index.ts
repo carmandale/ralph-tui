@@ -496,6 +496,31 @@ export type {
   StoredConfigValidated,
 } from './schema.js';
 
+/**
+ * Save configuration to the project config file (.ralph-tui.yaml).
+ * Creates the file if it doesn't exist, updates it if it does.
+ * @param config Configuration to save
+ * @param cwd Working directory (config will be saved in this directory)
+ */
+export async function saveProjectConfig(
+  config: StoredConfig,
+  cwd: string = process.cwd()
+): Promise<void> {
+  const { writeFile } = await import('node:fs/promises');
+  const projectPath = join(cwd, PROJECT_CONFIG_FILENAME);
+  const yaml = serializeConfig(config);
+  await writeFile(projectPath, yaml, 'utf-8');
+}
+
+/**
+ * Get the project config file path for a given working directory.
+ * @param cwd Working directory
+ * @returns Path to the project config file
+ */
+export function getProjectConfigPath(cwd: string = process.cwd()): string {
+  return join(cwd, PROJECT_CONFIG_FILENAME);
+}
+
 // Constants for external use
 export const CONFIG_PATHS = {
   global: GLOBAL_CONFIG_PATH,

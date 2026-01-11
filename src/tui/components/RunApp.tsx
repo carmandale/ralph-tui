@@ -20,8 +20,12 @@ import { IterationDetailView } from './IterationDetailView.js';
 import { ProgressDashboard } from './ProgressDashboard.js';
 import { ConfirmationDialog } from './ConfirmationDialog.js';
 import { HelpOverlay } from './HelpOverlay.js';
+import { SettingsView } from './SettingsView.js';
 import type { ExecutionEngine, EngineEvent, IterationResult } from '../../engine/index.js';
 import type { TrackerTask } from '../../plugins/trackers/types.js';
+import type { StoredConfig } from '../../config/types.js';
+import type { AgentPluginMeta } from '../../plugins/agents/types.js';
+import type { TrackerPluginMeta } from '../../plugins/trackers/types.js';
 
 /**
  * View modes for the RunApp component
@@ -54,6 +58,14 @@ export interface RunAppProps {
   initialTasks?: TrackerTask[];
   /** Callback when user wants to start the engine (Enter/s in ready state) */
   onStart?: () => Promise<void>;
+  /** Current stored configuration (for settings view) */
+  storedConfig?: StoredConfig;
+  /** Available agent plugins (for settings view) */
+  availableAgents?: AgentPluginMeta[];
+  /** Available tracker plugins (for settings view) */
+  availableTrackers?: TrackerPluginMeta[];
+  /** Callback when settings should be saved */
+  onSaveSettings?: (config: StoredConfig) => Promise<void>;
 }
 
 /**
@@ -180,6 +192,10 @@ export function RunApp({
   onInterruptCancel,
   initialTasks,
   onStart,
+  storedConfig,
+  availableAgents = [],
+  availableTrackers = [],
+  onSaveSettings,
 }: RunAppProps): ReactNode {
   const { width, height } = useTerminalDimensions();
   const [tasks, setTasks] = useState<TaskItem[]>(() => {
@@ -213,6 +229,8 @@ export function RunApp({
   const [detailIteration, setDetailIteration] = useState<IterationResult | null>(null);
   // Help overlay state
   const [showHelp, setShowHelp] = useState(false);
+  // Settings view state
+  const [showSettings, setShowSettings] = useState(false);
   // Show/hide closed tasks filter (default: show closed tasks)
   const [showClosedTasks, setShowClosedTasks] = useState(true);
   // Current task info for status display
@@ -439,6 +457,12 @@ export function RunApp({
         return; // Don't process other keys when help is showing
       }
 
+      // When settings view is showing, let it handle its own keyboard events
+      // Closing is handled by SettingsView internally via onClose callback
+      if (showSettings) {
+        return;
+      }
+
       switch (key.name) {
         case 'q':
           // Quit the application
@@ -545,6 +569,13 @@ export function RunApp({
           engine.refreshTasks();
           break;
 
+        case ',':
+          // Open settings view (comma key, like many text editors)
+          if (storedConfig && onSaveSettings) {
+            setShowSettings(true);
+          }
+          break;
+
         case 'return':
         case 'enter':
           // When in ready state, Enter starts the execution
@@ -573,7 +604,7 @@ export function RunApp({
           break;
       }
     },
-    [displayedTasks, selectedIndex, status, engine, onQuit, onTaskDrillDown, viewMode, iterations, iterationSelectedIndex, iterationHistoryLength, onIterationDrillDown, showInterruptDialog, onInterruptConfirm, onInterruptCancel, showHelp, onStart]
+    [displayedTasks, selectedIndex, status, engine, onQuit, onTaskDrillDown, viewMode, iterations, iterationSelectedIndex, iterationHistoryLength, onIterationDrillDown, showInterruptDialog, onInterruptConfirm, onInterruptCancel, showHelp, showSettings, onStart, storedConfig, onSaveSettings]
   );
 
   useKeyboard(handleKeyboard);
@@ -705,6 +736,18 @@ export function RunApp({
 
       {/* Help Overlay */}
       <HelpOverlay visible={showHelp} />
+
+      {/* Settings View */}
+      {storedConfig && onSaveSettings && (
+        <SettingsView
+          visible={showSettings}
+          config={storedConfig}
+          agents={availableAgents}
+          trackers={availableTrackers}
+          onSave={onSaveSettings}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </box>
   );
 }

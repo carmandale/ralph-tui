@@ -26,3 +26,5 @@ export { EpicSelectionView } from './EpicSelectionView.js';
 export type { EpicSelectionViewProps } from './EpicSelectionView.js';
 export { EpicSelectionApp } from './EpicSelectionApp.js';
 export type { EpicSelectionAppProps } from './EpicSelectionApp.js';
+export { SettingsView } from './SettingsView.js';
+export type { SettingsViewProps } from './SettingsView.js';

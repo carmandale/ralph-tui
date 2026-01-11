@@ -8,8 +8,8 @@
 import { useState } from 'react';
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
-import { buildConfig, validateConfig } from '../config/index.js';
-import type { RuntimeOptions } from '../config/types.js';
+import { buildConfig, validateConfig, loadStoredConfig, saveProjectConfig } from '../config/index.js';
+import type { RuntimeOptions, StoredConfig } from '../config/types.js';
 import {
   checkSession,
   createSession,
@@ -331,6 +331,10 @@ interface RunAppWrapperProps {
   initialTasks?: TrackerTask[];
   /** Callback when user wants to start the engine (Enter/s in ready state) */
   onStart?: () => Promise<void>;
+  /** Current stored configuration (for settings view) */
+  storedConfig?: StoredConfig;
+  /** Working directory for saving settings */
+  cwd?: string;
 }
 
 /**
@@ -344,8 +348,23 @@ function RunAppWrapper({
   onInterruptConfirmed,
   initialTasks,
   onStart,
+  storedConfig: initialStoredConfig,
+  cwd = process.cwd(),
 }: RunAppWrapperProps) {
   const [showInterruptDialog, setShowInterruptDialog] = useState(false);
+  const [storedConfig, setStoredConfig] = useState<StoredConfig | undefined>(initialStoredConfig);
+
+  // Get available plugins from registries
+  const agentRegistry = getAgentRegistry();
+  const trackerRegistry = getTrackerRegistry();
+  const availableAgents = agentRegistry.getRegisteredPlugins();
+  const availableTrackers = trackerRegistry.getRegisteredPlugins();
+
+  // Handle settings save
+  const handleSaveSettings = async (newConfig: StoredConfig): Promise<void> => {
+    await saveProjectConfig(newConfig, cwd);
+    setStoredConfig(newConfig);
+  };
 
   // These callbacks are passed to the interrupt handler
   const handleShowDialog = () => setShowInterruptDialog(true);
@@ -374,6 +393,10 @@ function RunAppWrapper({
       }}
       initialTasks={initialTasks}
       onStart={onStart}
+      storedConfig={storedConfig}
+      availableAgents={availableAgents}
+      availableTrackers={availableTrackers}
+      onSaveSettings={handleSaveSettings}
     />
   );
 }
@@ -392,8 +415,9 @@ function RunAppWrapper({
 async function runWithTui(
   engine: ExecutionEngine,
   persistedState: PersistedSessionState,
-  _config: RalphConfig,
-  initialTasks: TrackerTask[]
+  config: RalphConfig,
+  initialTasks: TrackerTask[],
+  storedConfig?: StoredConfig
 ): Promise<PersistedSessionState> {
   let currentState = persistedState;
   let showDialogCallback: (() => void) | null = null;
@@ -491,6 +515,8 @@ async function runWithTui(
       onInterruptConfirmed={gracefulShutdown}
       initialTasks={initialTasks}
       onStart={handleStart}
+      storedConfig={storedConfig}
+      cwd={config.cwd}
     />
   );
 
@@ -760,6 +786,9 @@ export async function executeRunCommand(args: string[]): Promise<void> {
     process.exit(1);
   }
 
+  // Load stored config for settings view (used when TUI is running)
+  const storedConfig = await loadStoredConfig(cwd);
+
   // Validate configuration
   const validation = await validateConfig(config);
   if (!validation.valid) {
@@ -920,7 +949,8 @@ export async function executeRunCommand(args: string[]): Promise<void> {
   try {
     if (config.showTui) {
       // Pass tasks for initial TUI display in "ready" state
-      persistedState = await runWithTui(engine, persistedState, config, tasks);
+      // Also pass storedConfig for settings view
+      persistedState = await runWithTui(engine, persistedState, config, tasks, storedConfig);
     } else {
       // Headless mode still auto-starts (for CI/automation)
       persistedState = await runHeadless(engine, persistedState, config);
