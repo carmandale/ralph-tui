@@ -73,9 +73,12 @@ export function PrdChatApp({
 
   // Refs
   const engineRef = useRef<ChatEngine | null>(null);
+  const isMountedRef = useRef(true);
+  const completionCallbackRef = useRef<(() => void) | null>(null);
 
   // Initialize chat engine
   useEffect(() => {
+    isMountedRef.current = true;
     const engine = createPrdChatEngine(agent, { cwd, timeout });
 
     // Subscribe to events
@@ -87,11 +90,14 @@ export function PrdChatApp({
 
         case 'prd:detected':
           // PRD was detected, save it
+          // Store callback to be invoked after sendMessage completes
           void savePrd(event.prdContent, event.featureName);
           break;
 
         case 'error:occurred':
-          setError(event.error);
+          if (isMountedRef.current) {
+            setError(event.error);
+          }
           onError?.(event.error);
           break;
       }
@@ -100,12 +106,15 @@ export function PrdChatApp({
     engineRef.current = engine;
 
     return () => {
+      isMountedRef.current = false;
       unsubscribe();
     };
   }, [agent, cwd, timeout, onError]);
 
   /**
    * Save the PRD content to a file
+   * Stores completion callback to be invoked after sendMessage finishes
+   * to prevent unmounting while state updates are in progress.
    */
   const savePrd = async (content: string, featureName: string) => {
     try {
@@ -126,11 +135,14 @@ export function PrdChatApp({
       // Write the file
       await writeFile(filepath, content, 'utf-8');
 
-      // Notify completion
-      onComplete(filepath, featureName);
+      // Store completion callback to be invoked after sendMessage finishes
+      // This prevents unmounting while state updates are in progress
+      completionCallbackRef.current = () => onComplete(filepath, featureName);
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      setError(`Failed to save PRD: ${errorMsg}`);
+      if (isMountedRef.current) {
+        setError(`Failed to save PRD: ${errorMsg}`);
+      }
       onError?.(errorMsg);
     }
   };
@@ -161,26 +173,45 @@ export function PrdChatApp({
     try {
       const result = await engineRef.current.sendMessage(userMessage, {
         onChunk: (chunk) => {
-          setStreamingChunk((prev) => prev + chunk);
+          if (isMountedRef.current) {
+            setStreamingChunk((prev) => prev + chunk);
+          }
         },
         onStatus: (status) => {
-          setLoadingStatus(status);
+          if (isMountedRef.current) {
+            setLoadingStatus(status);
+          }
         },
       });
 
-      if (result.success && result.response) {
-        // Add assistant response to messages
-        setMessages((prev) => [...prev, result.response!]);
-        setStreamingChunk('');
-      } else if (!result.success) {
-        setError(result.error || 'Failed to get response');
+      // Only update state if still mounted
+      if (isMountedRef.current) {
+        if (result.success && result.response) {
+          // Add assistant response to messages
+          setMessages((prev) => [...prev, result.response!]);
+          setStreamingChunk('');
+        } else if (!result.success) {
+          setError(result.error || 'Failed to get response');
+        }
       }
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : String(err);
-      setError(errorMsg);
+      if (isMountedRef.current) {
+        setError(errorMsg);
+      }
     } finally {
-      setIsLoading(false);
-      setLoadingStatus('');
+      if (isMountedRef.current) {
+        setIsLoading(false);
+        setLoadingStatus('');
+      }
+
+      // Invoke stored completion callback after all state updates are done
+      // This ensures the component is unmounted safely after sendMessage finishes
+      if (completionCallbackRef.current) {
+        const callback = completionCallbackRef.current;
+        completionCallbackRef.current = null;
+        callback();
+      }
     }
   }, [inputValue, isLoading]);
 
