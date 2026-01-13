@@ -32,7 +32,7 @@ import { registerBuiltinTrackers } from '../plugins/trackers/builtin/index.js';
 import { getAgentRegistry } from '../plugins/agents/registry.js';
 import { getTrackerRegistry } from '../plugins/trackers/registry.js';
 import { RunApp } from '../tui/components/RunApp.js';
-import { disableMouseTracking } from '../tui/terminal.js';
+import { restoreTerminal } from '../tui/terminal.js';
 
 /**
  * Parse CLI arguments for the resume command
@@ -100,6 +100,7 @@ async function runWithTui(
     useMouse: false,
     enableMouseMovement: false,
   });
+  process.on('exit', restoreTerminal);
 
   const root = createRoot(renderer);
 
@@ -127,7 +128,7 @@ async function runWithTui(
 
   const cleanup = async (): Promise<void> => {
     await engine.dispose();
-    disableMouseTracking();
+    restoreTerminal();
     renderer.destroy();
     await releaseLock(cwd);
   };

@@ -54,7 +54,7 @@ import type { InterruptHandler } from '../interruption/types.js';
 import { createStructuredLogger, clearProgress } from '../logs/index.js';
 import { sendCompletionNotification, sendMaxIterationsNotification, sendErrorNotification, resolveNotificationsEnabled } from '../notifications.js';
 import type { NotificationSoundMode } from '../config/types.js';
-import { disableMouseTracking } from '../tui/terminal.js';
+import { restoreTerminal } from '../tui/terminal.js';
 
 /**
  * Extended runtime options with noSetup flag
@@ -485,11 +485,12 @@ async function showEpicSelectionTui(
       useMouse: false,
       enableMouseMovement: false,
     });
+    process.on('exit', restoreTerminal);
 
     const root = createRoot(renderer);
 
     const cleanup = () => {
-      disableMouseTracking();
+      restoreTerminal();
       renderer.destroy();
     };
 
@@ -738,6 +739,7 @@ async function runWithTui(
     useMouse: false,
     enableMouseMovement: false,
   });
+  process.on('exit', restoreTerminal);
 
   const root = createRoot(renderer);
 
@@ -824,7 +826,7 @@ async function runWithTui(
   const cleanup = async (): Promise<void> => {
     interruptHandler.dispose();
     // Note: don't dispose engine here - it may already be stopped
-    disableMouseTracking();
+    restoreTerminal();
     renderer.destroy();
   };
 
@@ -851,7 +853,7 @@ async function runWithTui(
 
   // Force quit: immediate exit
   const forceQuit = (): void => {
-    disableMouseTracking();
+    restoreTerminal();
     renderer.destroy();
     process.exit(1);
   };

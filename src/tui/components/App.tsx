@@ -7,7 +7,7 @@ import { useKeyboard, useTerminalDimensions } from '@opentui/react';
 import type { ReactNode } from 'react';
 import { useState, useCallback, useEffect } from 'react';
 import { colors, layout } from '../theme.js';
-import { disableMouseTracking } from '../terminal.js';
+import { restoreTerminal } from '../terminal.js';
 import type { AppState, TaskItem } from '../types.js';
 import { Header } from './Header.js';
 import { Footer } from './Footer.js';
@@ -82,7 +82,7 @@ export function App({ initialState, onQuit }: AppProps): ReactNode {
           if (onQuit) {
             onQuit();
           } else {
-            disableMouseTracking();
+            restoreTerminal();
             process.exit(0);
           }
           break;
