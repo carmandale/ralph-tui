@@ -844,7 +844,7 @@ async function runWithTui(
 
   // Force quit: immediate exit
   const forceQuit = (): void => {
-    // Synchronous cleanup - just exit immediately
+    renderer.destroy();
     process.exit(1);
   };
 

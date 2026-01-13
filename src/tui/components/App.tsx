@@ -78,8 +78,11 @@ export function App({ initialState, onQuit }: AppProps): ReactNode {
         case 'q':
         case 'escape':
           // Quit the application
-          onQuit?.();
-          process.exit(0);
+          if (onQuit) {
+            onQuit();
+          } else {
+            process.exit(0);
+          }
           break;
 
         case 'up':
