@@ -179,6 +179,8 @@ async function runChatMode(parsedArgs: CreatePrdArgs): Promise<PrdCreationResult
   // Create renderer and render the chat app
   const renderer = await createCliRenderer({
     exitOnCtrlC: false, // We handle Ctrl+C in the app
+    useMouse: false,
+    enableMouseMovement: false,
   });
 
   const root = createRoot(renderer);

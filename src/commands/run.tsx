@@ -482,6 +482,8 @@ async function showEpicSelectionTui(
   return new Promise(async (resolve) => {
     const renderer = await createCliRenderer({
       exitOnCtrlC: false,
+      useMouse: false,
+      enableMouseMovement: false,
     });
 
     const root = createRoot(renderer);
@@ -733,6 +735,8 @@ async function runWithTui(
 
   const renderer = await createCliRenderer({
     exitOnCtrlC: false, // We handle this ourselves
+    useMouse: false,
+    enableMouseMovement: false,
   });
 
   const root = createRoot(renderer);

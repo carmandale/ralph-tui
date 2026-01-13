@@ -97,6 +97,8 @@ async function runWithTui(
 
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
+    useMouse: false,
+    enableMouseMovement: false,
   });
 
   const root = createRoot(renderer);
