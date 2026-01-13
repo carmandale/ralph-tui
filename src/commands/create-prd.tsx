@@ -13,6 +13,7 @@ import { getAgentRegistry } from '../plugins/agents/registry.js';
 import { registerBuiltinAgents } from '../plugins/agents/builtin/index.js';
 import type { AgentPlugin, AgentPluginConfig } from '../plugins/agents/types.js';
 import { executeRunCommand } from './run.js';
+import { disableMouseTracking } from '../tui/terminal.js';
 
 /**
  * Command-line arguments for the create-prd command.
@@ -185,6 +186,7 @@ async function runChatMode(parsedArgs: CreatePrdArgs): Promise<PrdCreationResult
   return new Promise<PrdCreationResult | null>((resolve) => {
     const handleComplete = (result: PrdCreationResult) => {
       root.unmount();
+      disableMouseTracking();
       renderer.destroy();
       console.log('');
       console.log(`PRD workflow complete: ${result.prdPath}`);
@@ -193,6 +195,7 @@ async function runChatMode(parsedArgs: CreatePrdArgs): Promise<PrdCreationResult
 
     const handleCancel = () => {
       root.unmount();
+      disableMouseTracking();
       renderer.destroy();
       console.log('');
       console.log('PRD creation cancelled.');
