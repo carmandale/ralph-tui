@@ -1,6 +1,7 @@
 /**
  * ABOUTME: Terminal reset helpers for the Ralph TUI.
- * Provides low-level escape sequences for terminal cleanup on exit.
+ * Provides low-level escape sequences for terminal cleanup on exit,
+ * and initialization sequences for features like bracketed paste mode.
  */
 
 import fs from 'node:fs';
@@ -9,6 +10,11 @@ const MOUSE_DISABLE_SEQUENCE =
   '\u001b[?1000l\u001b[?1002l\u001b[?1003l\u001b[?1005l\u001b[?1006l\u001b[?1015l';
 const EXIT_ALT_SCREEN = '\u001b[?1049l';
 const SHOW_CURSOR = '\u001b[?25h';
+
+// Bracketed paste mode - allows terminal to signal paste start/end
+// so we can distinguish pasted text from typed text
+const BRACKETED_PASTE_ENABLE = '\u001b[?2004h';
+const BRACKETED_PASTE_DISABLE = '\u001b[?2004l';
 
 function writeToTty(sequence: string): void {
   try {
@@ -22,6 +28,17 @@ function writeToTty(sequence: string): void {
 
   if (process.stdout.isTTY) {
     process.stdout.write(sequence);
+  }
+}
+
+/**
+ * Initialize terminal features for TUI mode.
+ * Call this when starting the TUI to enable features like bracketed paste.
+ */
+export function initTerminal(): void {
+  // Write directly to stdout to ensure it goes through after renderer init
+  if (process.stdout.isTTY) {
+    process.stdout.write(BRACKETED_PASTE_ENABLE);
   }
 }
 
@@ -44,5 +61,5 @@ export function restoreTerminal(): void {
     }
   }
 
-  writeToTty(MOUSE_DISABLE_SEQUENCE + EXIT_ALT_SCREEN + SHOW_CURSOR);
+  writeToTty(MOUSE_DISABLE_SEQUENCE + EXIT_ALT_SCREEN + SHOW_CURSOR + BRACKETED_PASTE_DISABLE);
 }

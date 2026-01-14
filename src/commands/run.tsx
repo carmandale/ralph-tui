@@ -54,7 +54,7 @@ import type { InterruptHandler } from '../interruption/types.js';
 import { createStructuredLogger, clearProgress } from '../logs/index.js';
 import { sendCompletionNotification, sendMaxIterationsNotification, sendErrorNotification, resolveNotificationsEnabled } from '../notifications.js';
 import type { NotificationSoundMode } from '../config/types.js';
-import { restoreTerminal } from '../tui/terminal.js';
+import { initTerminal, restoreTerminal } from '../tui/terminal.js';
 
 /**
  * Extended runtime options with noSetup flag
@@ -485,6 +485,7 @@ async function showEpicSelectionTui(
       useMouse: false,
       enableMouseMovement: false,
     });
+    initTerminal();
     process.on('exit', restoreTerminal);
 
     const root = createRoot(renderer);
@@ -739,6 +740,7 @@ async function runWithTui(
     useMouse: false,
     enableMouseMovement: false,
   });
+  initTerminal();
   process.on('exit', restoreTerminal);
 
   const root = createRoot(renderer);

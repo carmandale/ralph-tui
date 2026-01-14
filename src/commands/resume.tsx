@@ -32,7 +32,7 @@ import { registerBuiltinTrackers } from '../plugins/trackers/builtin/index.js';
 import { getAgentRegistry } from '../plugins/agents/registry.js';
 import { getTrackerRegistry } from '../plugins/trackers/registry.js';
 import { RunApp } from '../tui/components/RunApp.js';
-import { restoreTerminal } from '../tui/terminal.js';
+import { initTerminal, restoreTerminal } from '../tui/terminal.js';
 
 /**
  * Parse CLI arguments for the resume command
@@ -100,6 +100,7 @@ async function runWithTui(
     useMouse: false,
     enableMouseMovement: false,
   });
+  initTerminal();
   process.on('exit', restoreTerminal);
 
   const root = createRoot(renderer);

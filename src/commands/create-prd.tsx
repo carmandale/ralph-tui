@@ -13,7 +13,7 @@ import { getAgentRegistry } from '../plugins/agents/registry.js';
 import { registerBuiltinAgents } from '../plugins/agents/builtin/index.js';
 import type { AgentPlugin, AgentPluginConfig } from '../plugins/agents/types.js';
 import { executeRunCommand } from './run.js';
-import { restoreTerminal } from '../tui/terminal.js';
+import { initTerminal, restoreTerminal } from '../tui/terminal.js';
 
 /**
  * Command-line arguments for the create-prd command.
@@ -88,7 +88,7 @@ Options:
   --cwd, -C <path>       Working directory (default: current directory)
   --output, -o <dir>     Output directory for PRD files (default: ./tasks)
   --agent, -a <name>     Agent plugin to use (default: from config)
-  --timeout, -t <ms>     Timeout for AI agent calls (default: 180000)
+  --timeout, -t <ms>     Timeout for AI agent calls (default: no timeout)
   --force, -f            Overwrite existing files without prompting
   --help, -h             Show this help message
 
@@ -171,7 +171,7 @@ async function runChatMode(parsedArgs: CreatePrdArgs): Promise<PrdCreationResult
 
   const cwd = parsedArgs.cwd || process.cwd();
   const outputDir = parsedArgs.output || 'tasks';
-  const timeout = parsedArgs.timeout || 180000;
+  const timeout = parsedArgs.timeout ?? 0;
 
   console.log(`Using agent: ${agent.meta.name}`);
   console.log('');
@@ -182,6 +182,11 @@ async function runChatMode(parsedArgs: CreatePrdArgs): Promise<PrdCreationResult
     useMouse: false,
     enableMouseMovement: false,
   });
+
+  // Enable bracketed paste mode AFTER renderer init
+  // This allows Cmd+V to work in the TUI
+  initTerminal();
+
   process.on('exit', restoreTerminal);
 
   const root = createRoot(renderer);

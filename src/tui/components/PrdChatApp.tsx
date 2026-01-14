@@ -181,7 +181,7 @@ export function PrdChatApp({
   agent,
   cwd = process.cwd(),
   outputDir = 'tasks',
-  timeout = 180000,
+  timeout = 0,
   onComplete,
   onCancel,
   onError,
