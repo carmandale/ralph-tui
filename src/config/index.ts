@@ -163,6 +163,7 @@ function mergeConfigs(global: StoredConfig, project: StoredConfig): StoredConfig
   }
 
   // Override other scalar fields
+  if (project.skills_dir !== undefined) merged.skills_dir = project.skills_dir;
   if (project.progressFile !== undefined) merged.progressFile = project.progressFile;
   if (project.autoCommit !== undefined) merged.autoCommit = project.autoCommit;
   if (project.subagentTracingDetail !== undefined) {

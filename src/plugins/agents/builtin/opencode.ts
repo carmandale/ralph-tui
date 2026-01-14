@@ -6,7 +6,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { BaseAgentPlugin } from '../base.js';
+import { BaseAgentPlugin, findCommandPath } from '../base.js';
 import type {
   AgentPluginMeta,
   AgentPluginFactory,
@@ -14,13 +14,47 @@ import type {
   AgentExecuteOptions,
   AgentSetupQuestion,
   AgentDetectResult,
+  AgentExecutionHandle,
 } from '../types.js';
-
-/** Supported providers for the model flag */
-type OpenCodeProvider = 'anthropic' | 'openai' | 'google' | 'xai' | 'ollama';
 
 /** Output format options */
 type OpenCodeFormat = 'default' | 'json';
+
+/**
+ * Patterns to match opencode metadata lines that should be filtered from output.
+ * These are status/debug lines that aren't part of the actual response.
+ */
+const OPENCODE_METADATA_PATTERNS = [
+  /^[|!]\s+/,                  // Any line starting with "| " or "! " (tool calls, status)
+  /^\s*\[\d+\/\d+\]/,          // Progress indicators like "[1/3]"
+  /^(Reading|Writing|Creating|Updating|Running)\s+/i,  // Action status lines
+  /^\s*\{[\s\S]*"type":\s*"/,  // JSON event objects
+  /^\s*\{[\s\S]*"description":\s*"/,  // JSON with description field (background_task)
+  /^\s*\{[\s\S]*"path":\s*"/,  // JSON with path field (Glob, Read)
+  /^\s*\{[\s\S]*"pattern":\s*"/,  // JSON with pattern field (grep)
+  /^[^\s]+\.(md|ts|tsx|js|json):\s*["{[]/,  // Grep-style output: filepath: JSON/string
+  /^skills\//,                 // Skills directory paths
+];
+
+/**
+ * Check if a line matches any metadata pattern.
+ */
+function isMetadataLine(line: string): boolean {
+  // Strip ANSI escape codes for pattern matching
+  const cleanLine = line.replace(/\x1b\[[0-9;]*m/g, '');
+  return OPENCODE_METADATA_PATTERNS.some((pattern) => pattern.test(cleanLine));
+}
+
+/**
+ * Filter opencode metadata lines from output.
+ * Returns the text with metadata lines removed.
+ */
+function filterOpenCodeMetadata(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !isMetadataLine(line))
+    .join('\n');
+}
 
 /**
  * OpenCode agent plugin implementation.
@@ -34,6 +68,7 @@ type OpenCodeFormat = 'default' | 'json';
  * - File attachment via --file flag (can be used multiple times)
  * - Timeout handling with graceful SIGTERM before SIGKILL
  * - Streaming stdout/stderr capture
+ * - Filters metadata lines from output (slashcommand, agent warnings)
  */
 export class OpenCodeAgentPlugin extends BaseAgentPlugin {
   readonly meta: AgentPluginMeta = {
@@ -49,8 +84,8 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     supportsSubagentTracing: false,
   };
 
-  /** AI provider (anthropic, openai, google, xai, ollama) */
-  private provider?: OpenCodeProvider;
+  /** AI provider (any string, validated by OpenCode CLI) */
+  private provider?: string;
 
   /** Model name (without provider prefix) */
   private model?: string;
@@ -67,11 +102,9 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
   override async initialize(config: Record<string, unknown>): Promise<void> {
     await super.initialize(config);
 
-    if (
-      typeof config.provider === 'string' &&
-      ['anthropic', 'openai', 'google', 'xai', 'ollama'].includes(config.provider)
-    ) {
-      this.provider = config.provider as OpenCodeProvider;
+    // Accept any provider string - OpenCode CLI validates provider validity
+    if (typeof config.provider === 'string' && config.provider.length > 0) {
+      this.provider = config.provider;
     }
 
     if (typeof config.model === 'string' && config.model.length > 0) {
@@ -98,16 +131,16 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
   }
 
   /**
-   * Detect opencode CLI availability using `which` command.
-   * Falls back to testing direct execution if `which` is not available.
+   * Detect opencode CLI availability.
+   * Uses platform-appropriate command (where on Windows, which on Unix).
    */
   override async detect(): Promise<AgentDetectResult> {
     const command = this.commandPath ?? this.meta.defaultCommand;
 
-    // First, try to find the binary using `which`
-    const whichResult = await this.runWhich(command);
+    // First, try to find the binary in PATH
+    const findResult = await findCommandPath(command);
 
-    if (!whichResult.found) {
+    if (!findResult.found) {
       return {
         available: false,
         error: `OpenCode CLI not found in PATH. Install with: curl -fsSL https://opencode.ai/install | bash`,
@@ -115,12 +148,12 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     }
 
     // Verify the binary works by running --version
-    const versionResult = await this.runVersion(whichResult.path);
+    const versionResult = await this.runVersion(findResult.path);
 
     if (!versionResult.success) {
       return {
         available: false,
-        executablePath: whichResult.path,
+        executablePath: findResult.path,
         error: versionResult.error,
       };
     }
@@ -128,43 +161,8 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     return {
       available: true,
       version: versionResult.version,
-      executablePath: whichResult.path,
+      executablePath: findResult.path,
     };
-  }
-
-  /**
-   * Run `which` command to find binary path
-   */
-  private runWhich(command: string): Promise<{ found: boolean; path: string }> {
-    return new Promise((resolve) => {
-      const proc = spawn('which', [command], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
-
-      let stdout = '';
-
-      proc.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      proc.on('error', () => {
-        resolve({ found: false, path: '' });
-      });
-
-      proc.on('close', (code) => {
-        if (code === 0 && stdout.trim()) {
-          resolve({ found: true, path: stdout.trim() });
-        } else {
-          resolve({ found: false, path: '' });
-        }
-      });
-
-      // Timeout after 5 seconds
-      setTimeout(() => {
-        proc.kill();
-        resolve({ found: false, path: '' });
-      }, 5000);
-    });
   }
 
   /**
@@ -285,8 +283,11 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     // OpenCode uses: opencode run [flags] [message..]
     const args: string[] = ['run'];
 
-    // Add agent type (default is 'general')
-    args.push('--agent', this.agent);
+    // Only add agent type if explicitly set to non-default value
+    // Omitting --agent lets opencode use its default, avoiding warning messages
+    if (this.agent !== 'general') {
+      args.push('--agent', this.agent);
+    }
 
     // Add model in provider/model format if both are specified
     const modelToUse = this.buildModelString();
@@ -325,6 +326,31 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
   }
 
   /**
+   * Override execute to filter opencode metadata from stdout.
+   * Wraps the onStdout callback to remove status lines like "|  slashcommand {...}".
+   */
+  override execute(
+    prompt: string,
+    files?: AgentFileContext[],
+    options?: AgentExecuteOptions
+  ): AgentExecutionHandle {
+    // Wrap onStdout to filter metadata lines
+    const filteredOptions: AgentExecuteOptions = {
+      ...options,
+      onStdout: options?.onStdout
+        ? (data: string) => {
+            const filtered = filterOpenCodeMetadata(data);
+            if (filtered.trim()) {
+              options.onStdout!(filtered);
+            }
+          }
+        : undefined,
+    };
+
+    return super.execute(prompt, files, filteredOptions);
+  }
+
+  /**
    * Build the model string in provider/model format.
    * OpenCode expects models like: anthropic/claude-3-5-sonnet, openai/gpt-4o
    */
@@ -342,15 +368,16 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
   override async validateSetup(
     answers: Record<string, unknown>
   ): Promise<string | null> {
-    // Validate provider
+    // Validate provider - accept any non-empty string since OpenCode supports 75+ providers
     const provider = answers.provider;
     if (
       provider !== undefined &&
       provider !== '' &&
-      !['anthropic', 'openai', 'google', 'xai', 'ollama'].includes(String(provider))
+      typeof provider !== 'string'
     ) {
-      return 'Invalid provider. Must be one of: anthropic, openai, google, xai, ollama';
+      return 'Provider must be a string';
     }
+    // Provider validation is delegated to OpenCode CLI - it will error if invalid
 
     // Validate agent type
     const agent = answers.agent;
@@ -376,29 +403,26 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
   }
 
   /**
-   * Valid providers for the OpenCode agent.
-   */
-  static readonly VALID_PROVIDERS = ['anthropic', 'openai', 'google', 'xai', 'ollama'] as const;
-
-  /**
-   * Validate a model name for the OpenCode agent.
-   * Accepts either "provider/model" format or just "model".
-   * Validates the provider if specified, but model names are passed through
-   * since they vary by provider and change frequently.
-   * @param model The model name to validate
-   * @returns null if valid, error message if invalid
-   */
+    * Validate a model name for the OpenCode agent.
+    * Accepts either "provider/model" format or just "model" name.
+    * Provider validation is delegated to the OpenCode CLI which supports 75+ providers.
+    * @param model The model name to validate
+    * @returns null if valid, error message if invalid
+    */
   override validateModel(model: string): string | null {
     if (model === '' || model === undefined) {
       return null; // Empty is valid (uses default)
     }
 
     // Check if model is in provider/model format
+    // We accept any provider name since OpenCode CLI validates providers
+    // and supports 75+ LLM providers through its AI SDK integration
     if (model.includes('/')) {
-      const [provider] = model.split('/');
-      if (!OpenCodeAgentPlugin.VALID_PROVIDERS.includes(provider as typeof OpenCodeAgentPlugin.VALID_PROVIDERS[number])) {
-        return `Invalid provider "${provider}" in model "${model}". Valid providers: ${OpenCodeAgentPlugin.VALID_PROVIDERS.join(', ')}`;
+      const [provider, modelName] = model.split('/');
+      if (!provider || !modelName) {
+        return `Invalid model format "${model}". Expected format: provider/model (e.g., anthropic/claude-3-5-sonnet)`;
       }
+      // Provider and model name are passed through - OpenCode CLI validates them
     }
 
     // Model name itself is not validated - let opencode CLI handle it

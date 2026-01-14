@@ -547,6 +547,8 @@ interface RunAppWrapperProps {
   initialSubagentPanelVisible?: boolean;
   /** Callback to update persisted session state */
   onUpdatePersistedState?: (updater: (state: PersistedSessionState) => PersistedSessionState) => void;
+  /** Current model being used (provider/model format, e.g., "anthropic/claude-3-5-sonnet") */
+  currentModel?: string;
 }
 
 /**
@@ -566,6 +568,7 @@ function RunAppWrapper({
   currentEpicId: initialEpicId,
   initialSubagentPanelVisible = false,
   onUpdatePersistedState,
+  currentModel,
 }: RunAppWrapperProps) {
   const [showInterruptDialog, setShowInterruptDialog] = useState(false);
   const [storedConfig, setStoredConfig] = useState<StoredConfig | undefined>(initialStoredConfig);
@@ -691,6 +694,7 @@ function RunAppWrapper({
       currentEpicId={currentEpicId}
       initialSubagentPanelVisible={initialSubagentPanelVisible}
       onSubagentPanelVisibilityChange={handleSubagentPanelVisibilityChange}
+      currentModel={currentModel}
     />
   );
 }
@@ -915,6 +919,7 @@ async function runWithTui(
       currentEpicId={config.epicId}
       initialSubagentPanelVisible={persistedState.subagentPanelVisible ?? false}
       onUpdatePersistedState={handleUpdatePersistedState}
+      currentModel={config.model}
     />
   );
 

@@ -6,16 +6,17 @@
 
 import type { ReactNode } from 'react';
 import { useState, useCallback, useEffect, useRef } from 'react';
-import { useKeyboard, useRenderer } from '@opentui/react';
-import type { KeyEvent, PasteEvent } from '@opentui/core';
+import { useKeyboard } from '@opentui/react';
+import type { KeyEvent } from '@opentui/core';
 import { writeFile, mkdir, access } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { ChatView } from './ChatView.js';
 import { ConfirmationDialog } from './ConfirmationDialog.js';
-import { ChatEngine, createPrdChatEngine, slugify } from '../../chat/engine.js';
+import { ChatEngine, createPrdChatEngine, createTaskChatEngine, slugify } from '../../chat/engine.js';
 import type { ChatMessage, ChatEvent } from '../../chat/types.js';
 import type { AgentPlugin } from '../../plugins/agents/types.js';
+import { parsePrdMarkdown } from '../../prd/index.js';
 import { colors } from '../theme.js';
 
 /**
@@ -45,6 +46,10 @@ export interface PrdChatAppProps {
 
   /** Timeout for agent calls in milliseconds */
   timeout?: number;
+
+  prdSkill?: string;
+
+  prdSkillSource?: string;
 
   /** Callback when PRD is successfully generated */
   onComplete: (result: PrdCreationResult) => void;
@@ -182,6 +187,8 @@ export function PrdChatApp({
   cwd = process.cwd(),
   outputDir = 'tasks',
   timeout = 0,
+  prdSkill,
+  prdSkillSource,
   onComplete,
   onCancel,
   onError,
@@ -210,6 +217,7 @@ export function PrdChatApp({
 
   // Refs
   const engineRef = useRef<ChatEngine | null>(null);
+  const taskEngineRef = useRef<ChatEngine | null>(null);
   const isMountedRef = useRef(true);
 
   // Get tracker options
@@ -218,7 +226,13 @@ export function PrdChatApp({
   // Initialize chat engine
   useEffect(() => {
     isMountedRef.current = true;
-    const engine = createPrdChatEngine(agent, { cwd, timeout });
+    const engine = createPrdChatEngine(agent, {
+      cwd,
+      timeout,
+      prdSkill,
+      prdSkillSource,
+    });
+    const taskEngine = createTaskChatEngine(agent, { cwd, timeout });
 
     // Subscribe to events
     const unsubscribe = engine.on((event: ChatEvent) => {
@@ -241,12 +255,13 @@ export function PrdChatApp({
     });
 
     engineRef.current = engine;
+    taskEngineRef.current = taskEngine;
 
     return () => {
       isMountedRef.current = false;
       unsubscribe();
     };
-  }, [agent, cwd, timeout, onError]);
+  }, [agent, cwd, timeout, prdSkill, prdSkillSource, onError]);
 
   /**
    * Handle PRD detection - save file and switch to review phase
@@ -311,7 +326,16 @@ Press a number key to select, or continue chatting.`,
    */
   const handleTrackerSelect = useCallback(
     async (option: TrackerOption) => {
-      if (!engineRef.current || !prdPath || isLoading) return;
+      if (!taskEngineRef.current || !prdPath || !prdContent || isLoading) return;
+
+      const parsedPrd = parsePrdMarkdown(prdContent);
+      if (parsedPrd.userStories.length === 0) {
+        const errorMessage =
+          'PRD has no user stories. Add sections like "### US-001: Title" with acceptance criteria checklists.';
+        setError(errorMessage);
+        onError?.(errorMessage);
+        return;
+      }
 
       // Record which tracker format was selected
       const format = option.key === '1' ? 'json' : 'beads';
@@ -336,7 +360,7 @@ The PRD file is at: ${prdPath}
 Read the PRD and create the appropriate tasks.`;
 
       try {
-        const result = await engineRef.current.sendMessage(prompt, {
+        const result = await taskEngineRef.current.sendMessage(prompt, {
           onChunk: (chunk) => {
             if (isMountedRef.current) {
               setStreamingChunk((prev) => prev + chunk);
@@ -377,23 +401,24 @@ Read the PRD and create the appropriate tasks.`;
         }
       }
     },
-    [prdPath, isLoading]
+    [prdPath, prdContent, isLoading, onError]
   );
 
   /**
    * Send a chat message to the agent
    */
-  const sendMessage = useCallback(async () => {
-    if (!inputValue.trim() || !engineRef.current || isLoading) {
-      return;
-    }
+  const sendMessage = useCallback(
+    async (value?: string) => {
+      const userMessage = value?.trim() ?? inputValue.trim();
+      if (!userMessage || !engineRef.current || isLoading) {
+        return;
+      }
 
-    const userMessage = inputValue.trim();
-    setInputValue('');
-    setIsLoading(true);
-    setStreamingChunk('');
-    setLoadingStatus('Sending to agent...');
-    setError(undefined);
+      setInputValue('');
+      setIsLoading(true);
+      setStreamingChunk('');
+      setLoadingStatus('Sending to agent...');
+      setError(undefined);
 
     const userMsg: ChatMessage = {
       role: 'user',
@@ -429,16 +454,19 @@ Read the PRD and create the appropriate tasks.`;
       if (isMountedRef.current) {
         setError(errorMsg);
       }
-    } finally {
-      if (isMountedRef.current) {
-        setIsLoading(false);
-        setLoadingStatus('');
+      } finally {
+        if (isMountedRef.current) {
+          setIsLoading(false);
+          setLoadingStatus('');
+        }
       }
-    }
-  }, [inputValue, isLoading]);
+    },
+    [inputValue, isLoading]
+  );
 
   /**
-   * Handle keyboard input
+   * Handle keyboard input (only for non-input keys like Escape and review phase shortcuts)
+   * Text editing is handled by the native OpenTUI input component
    */
   const handleKeyboard = useCallback(
     (key: KeyEvent) => {
@@ -477,77 +505,27 @@ Read the PRD and create the appropriate tasks.`;
         }
       }
 
-      switch (key.name) {
-        case 'escape':
-          if (phase === 'review' && prdPath && featureName) {
-            // In review phase, escape completes (PRD already saved)
-            onComplete({ prdPath, featureName, selectedTracker: selectedTrackerFormat });
-          } else {
-            // In chat phase, show confirmation dialog
-            setShowQuitConfirm(true);
-          }
-          break;
-
-        case 'return':
-        case 'enter':
-          void sendMessage();
-          break;
-
-        case 'backspace':
-          setInputValue((prev) => prev.slice(0, -1));
-          break;
-
-        default:
-          // Handle regular character input
-          // Skip if any modifier key (except shift) is pressed - these are shortcuts
-          if (key.ctrl || key.meta || key.option || key.super || key.hyper) {
-            break;
-          }
-
-          if (key.sequence) {
-            const printableChars = key.sequence
-              .split('')
-              .filter((char) => char.charCodeAt(0) >= 32)
-              .join('');
-
-            if (printableChars.length > 0) {
-              setInputValue((prev) => prev + printableChars);
-            }
-          }
-          break;
+      // Handle escape key
+      if (key.name === 'escape') {
+        if (phase === 'review' && prdPath && featureName) {
+          // In review phase, escape completes (PRD already saved)
+          onComplete({ prdPath, featureName, selectedTracker: selectedTrackerFormat });
+        } else {
+          // In chat phase, show confirmation dialog
+          setShowQuitConfirm(true);
+        }
       }
     },
-    [showQuitConfirm, isLoading, phase, trackerOptions, handleTrackerSelect, prdPath, featureName, selectedTrackerFormat, onComplete, onCancel, sendMessage]
+    [showQuitConfirm, isLoading, phase, trackerOptions, handleTrackerSelect, prdPath, featureName, selectedTrackerFormat, onComplete, onCancel]
   );
 
   useKeyboard(handleKeyboard);
-
-  // Handle paste events separately from keyboard input
-  // OpenTUI emits paste as a separate event type on the keyInput handler
-  const renderer = useRenderer();
-  useEffect(() => {
-    const handlePaste = (event: PasteEvent) => {
-      // Don't process paste while loading or in quit confirmation
-      if (isLoading || showQuitConfirm) {
-        return;
-      }
-      // Append pasted text to input value
-      if (event.text) {
-        setInputValue((prev) => prev + event.text);
-      }
-    };
-
-    renderer.keyInput.on('paste', handlePaste);
-    return () => {
-      renderer.keyInput.off('paste', handlePaste);
-    };
-  }, [renderer, isLoading, showQuitConfirm]);
 
   // Determine hint text based on phase
   const hint =
     phase === 'review'
       ? '[1] JSON  [2] Beads  [3] Done  [Enter] Chat  [Esc] Finish'
-      : '[Enter] Send  [Esc] Cancel';
+      : '[Enter] Send  [Shift+Enter/Ctrl+J] Newline  [Esc] Cancel';
 
   // In review phase, show split pane
   if (phase === 'review' && prdContent && prdPath) {
@@ -574,6 +552,7 @@ Read the PRD and create the appropriate tasks.`;
             inputEnabled={!isLoading}
             hint={hint}
             agentName={agent.meta.name}
+            onSubmit={sendMessage}
           />
         </box>
 
@@ -601,6 +580,7 @@ Read the PRD and create the appropriate tasks.`;
         inputEnabled={!isLoading && !showQuitConfirm}
         hint={hint}
         agentName={agent.meta.name}
+        onSubmit={sendMessage}
       />
       <ConfirmationDialog
         visible={showQuitConfirm}

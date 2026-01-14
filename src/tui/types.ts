@@ -94,6 +94,12 @@ export interface HeaderProps {
   activeAgentState?: ActiveAgentState | null;
   /** Rate limit state from engine (tracks primary agent rate limiting) */
   rateLimitState?: RateLimitState | null;
+  /** Current iteration number (for iteration progress display) */
+  currentIteration?: number;
+  /** Maximum iterations (0 = unlimited, for iteration progress display) */
+  maxIterations?: number;
+  /** Current model being used (provider/model format, e.g., "anthropic/claude-3-5-sonnet") */
+  currentModel?: string;
 }
 
 /**
@@ -129,6 +135,8 @@ export interface IterationTimingInfo {
   durationMs?: number;
   /** Whether the iteration is currently running */
   isRunning?: boolean;
+  /** Model used for this iteration (provider/model format, e.g., "anthropic/claude-3-5-sonnet") */
+  model?: string;
 }
 
 /**
@@ -147,6 +155,10 @@ export interface RightPanelProps {
   onToggleViewMode?: () => void;
   /** Timing information for the iteration (optional) */
   iterationTiming?: IterationTimingInfo;
+  /** Name of the agent being used */
+  agentName?: string;
+  /** Model being used (provider/model format) */
+  currentModel?: string;
   /**
    * Subagent tracing detail level.
    * Controls how much subagent information is shown:

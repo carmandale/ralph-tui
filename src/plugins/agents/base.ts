@@ -5,6 +5,70 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { appendFileSync } from 'node:fs';
+import { tmpdir, platform } from 'node:os';
+import { join } from 'node:path';
+
+/** Debug log helper - writes to file to avoid TUI interference */
+function debugLog(msg: string): void {
+  if (process.env.RALPH_DEBUG) {
+    try {
+      const logPath = join(tmpdir(), 'ralph-agent-debug.log');
+      appendFileSync(logPath, `${new Date().toISOString()} ${msg}\n`);
+    } catch {
+      // Ignore write errors
+    }
+  }
+}
+
+/**
+ * Find a command's path using the platform-appropriate utility.
+ * Uses `where` on Windows and `which` on Unix-like systems.
+ * @param command The command name to find
+ * @returns Promise with found status and path
+ */
+export function findCommandPath(
+  command: string
+): Promise<{ found: boolean; path: string }> {
+  return new Promise((resolve) => {
+    const isWindows = platform() === 'win32';
+    const whichCmd = isWindows ? 'where' : 'which';
+
+    const proc = spawn(whichCmd, [command], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // On Windows, 'where' needs shell for proper PATH resolution
+      shell: isWindows,
+    });
+
+    let stdout = '';
+
+    proc.stdout?.on('data', (data: Buffer) => {
+      stdout += data.toString();
+    });
+
+    proc.on('error', () => {
+      resolve({ found: false, path: '' });
+    });
+
+    proc.on('close', (code) => {
+      if (code === 0 && stdout.trim()) {
+        // On Windows, 'where' may return multiple paths (one per line)
+        // Take the first one
+        const firstPath = stdout.trim().split(/\r?\n/)[0] ?? '';
+        resolve({ found: true, path: firstPath.trim() });
+      } else {
+        resolve({ found: false, path: '' });
+      }
+    });
+
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      proc.kill();
+      resolve({ found: false, path: '' });
+    }, 5000);
+  });
+}
+
 import { randomUUID } from 'node:crypto';
 import type {
   AgentPlugin,
@@ -267,6 +331,11 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
 
     // Handle process exit
     proc.on('close', (code, signal) => {
+      // Debug: log close event
+      if (process.env.RALPH_DEBUG) {
+        debugLog(`[DEBUG] Process close: code=${code}, signal=${signal}, execId=${executionId}`);
+      }
+
       // Determine status
       let status: AgentExecutionStatus;
       if (execution.interrupted) {
@@ -280,6 +349,15 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
       }
 
       this.completeExecution(executionId, status, code ?? undefined);
+    });
+
+    // Backup: also listen for 'exit' event in case 'close' doesn't fire
+    proc.on('exit', (code, signal) => {
+      if (process.env.RALPH_DEBUG) {
+        debugLog(`[DEBUG] Process exit: code=${code}, signal=${signal}, execId=${executionId}`);
+      }
+      // Note: We don't call completeExecution here to avoid double-completion
+      // 'close' should fire after 'exit' once stdio streams are closed
     });
 
     // Set up timeout if specified
@@ -317,7 +395,14 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
   ): void {
     const execution = this.executions.get(executionId);
     if (!execution) {
+      if (process.env.RALPH_DEBUG) {
+        debugLog(`[DEBUG] completeExecution: execution not found for ${executionId}`);
+      }
       return;
+    }
+
+    if (process.env.RALPH_DEBUG) {
+      debugLog(`[DEBUG] completeExecution: status=${status}, exitCode=${exitCode}, execId=${executionId}`);
     }
 
     // Clear timeout if set
@@ -348,6 +433,9 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
     }
 
     // Resolve the promise
+    if (process.env.RALPH_DEBUG) {
+      debugLog(`[DEBUG] Resolving promise for ${executionId}, stdout length=${result.stdout.length}`);
+    }
     execution.resolve(result);
   }
 

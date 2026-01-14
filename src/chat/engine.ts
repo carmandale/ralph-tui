@@ -19,7 +19,10 @@ import type { AgentPlugin, AgentExecuteOptions } from '../plugins/agents/types.j
 /**
  * Default system prompt for PRD generation.
  */
-export const PRD_SYSTEM_PROMPT = `You are helping create a Product Requirements Document (PRD) using the ralph-tui-prd skill.
+export const DEFAULT_PRD_SKILL = 'ralph-tui-prd';
+
+export function buildPrdSystemPrompt(skillName: string): string {
+  return `You are helping create a Product Requirements Document (PRD) using the ${skillName} skill.
 
 Follow these guidelines:
 1. Ask clarifying questions with lettered options (A, B, C, D) for quick responses
@@ -29,6 +32,36 @@ Follow these guidelines:
 
 The user can respond with shorthand like "1A, 2C" for quick iteration.
 `;
+}
+
+export const PRD_SYSTEM_PROMPT = buildPrdSystemPrompt(DEFAULT_PRD_SKILL);
+
+const TASK_SYSTEM_PROMPT = 'You are a helpful assistant. Follow the user instructions carefully.';
+
+const PRD_COMPATIBILITY_GUIDANCE = `
+# PRD Output Requirements
+- Wrap the final PRD in [PRD]...[/PRD] markers.
+- Start the PRD with a "# PRD: <Feature Name>" heading.
+- Include a "## Quality Gates" section listing required commands.
+- Include a "## User Stories" section with entries like:
+  - "### US-001: Title"
+  - "**Description:** As a user, I want..."
+  - "**Acceptance Criteria:**" followed by checklist bullets ("- [ ] ...").
+- Use markdown formatting suitable for conversion tools.
+`;
+
+function stripSkillFrontMatter(skillSource: string): string {
+  const frontMatterRegex = /^---\s*[\s\S]*?\n---\s*\n?/;
+  return skillSource.replace(frontMatterRegex, '').trim();
+}
+
+export function buildPrdSystemPromptFromSkillSource(skillSource: string): string {
+  const cleanedSource = stripSkillFrontMatter(skillSource);
+  if (!cleanedSource) {
+    return PRD_COMPATIBILITY_GUIDANCE.trim();
+  }
+  return `${cleanedSource}\n\n${PRD_COMPATIBILITY_GUIDANCE}`.trim();
+}
 
 /**
  * ChatEngine manages multi-turn conversations with an AI agent.
@@ -338,11 +371,34 @@ export function createPrdChatEngine(
   options: {
     cwd?: string;
     timeout?: number;
+    prdSkill?: string;
+    prdSkillSource?: string;
+  } = {}
+): ChatEngine {
+  const systemPrompt = options.prdSkillSource
+    ? buildPrdSystemPromptFromSkillSource(options.prdSkillSource)
+    : options.prdSkill
+      ? buildPrdSystemPrompt(options.prdSkill)
+      : PRD_SYSTEM_PROMPT;
+
+  return new ChatEngine({
+    agent,
+    systemPrompt,
+    cwd: options.cwd,
+    timeout: options.timeout ?? 180000,
+  });
+}
+
+export function createTaskChatEngine(
+  agent: AgentPlugin,
+  options: {
+    cwd?: string;
+    timeout?: number;
   } = {}
 ): ChatEngine {
   return new ChatEngine({
     agent,
-    systemPrompt: PRD_SYSTEM_PROMPT,
+    systemPrompt: TASK_SYSTEM_PROMPT,
     cwd: options.cwd,
     timeout: options.timeout ?? 0,
   });

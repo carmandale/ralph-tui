@@ -126,6 +126,8 @@ export const StoredConfigSchema = z
     // Custom prompt template path
     prompt_template: z.string().optional(),
 
+    skills_dir: z.string().optional(),
+
     // Subagent tracing detail level
     subagentTracingDetail: SubagentDetailLevelSchema.optional(),
 

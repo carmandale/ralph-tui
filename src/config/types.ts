@@ -176,6 +176,8 @@ export interface StoredConfig {
   /** Custom prompt template path (relative to cwd or absolute) */
   prompt_template?: string;
 
+  skills_dir?: string;
+
   /** Subagent tracing detail level for controlling display verbosity */
   subagentTracingDetail?: SubagentDetailLevel;
 

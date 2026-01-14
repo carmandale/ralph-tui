@@ -15,6 +15,8 @@ export interface ProgressDashboardProps {
   status: RalphStatus;
   /** Name of the agent being used */
   agentName: string;
+  /** Model being used (provider/model format) */
+  currentModel?: string;
   /** Name of the tracker being used */
   trackerName: string;
   /** Epic or project name */
@@ -74,6 +76,7 @@ function getStatusDisplay(
 export function ProgressDashboard({
   status,
   agentName,
+  currentModel,
   trackerName,
   epicName,
   currentTaskId,
@@ -84,6 +87,14 @@ export function ProgressDashboard({
   // Show current task title when executing
   const taskDisplay = currentTaskTitle && (status === 'executing' || status === 'running')
     ? truncateText(currentTaskTitle, 50)
+    : null;
+
+  // Parse model info for display
+  const modelDisplay = currentModel
+    ? (() => {
+        const [provider, model] = currentModel.includes('/') ? currentModel.split('/') : ['', currentModel];
+        return { provider, model, full: currentModel };
+      })()
     : null;
 
   return (
@@ -113,6 +124,12 @@ export function ProgressDashboard({
         <box style={{ flexDirection: 'row', gap: 2 }}>
           <text fg={colors.fg.secondary}>Agent: </text>
           <text fg={colors.accent.secondary}>{agentName}</text>
+          {modelDisplay && (
+            <>
+              <text fg={colors.fg.muted}> | </text>
+              <text fg={colors.accent.primary}>{modelDisplay.provider}/{modelDisplay.model}</text>
+            </>
+          )}
           <text fg={colors.fg.muted}> | </text>
           <text fg={colors.fg.secondary}>Tracker: </text>
           <text fg={colors.accent.tertiary}>{trackerName}</text>

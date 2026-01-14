@@ -129,6 +129,7 @@ function getAgentDisplay(
  * - Status indicator and label
  * - Current task (when executing)
  * - Agent and tracker plugin names (for configuration visibility)
+ * - Model being used (provider/model format with logo)
  * - Fallback indicator when using fallback agent
  * - Rate limit icon when primary agent is limited
  * - Status line when primary agent is rate limited (explains fallback)
@@ -146,12 +147,23 @@ export function Header({
   trackerName,
   activeAgentState,
   rateLimitState,
+  currentIteration,
+  maxIterations,
+  currentModel,
 }: HeaderProps): ReactNode {
   const statusDisplay = getStatusDisplay(status);
   const formattedTime = formatElapsedTime(elapsedTime);
 
   // Get agent display info including fallback status and status line message
   const agentDisplay = getAgentDisplay(agentName, activeAgentState, rateLimitState);
+
+  // Parse model info for display
+  const modelDisplay = currentModel
+    ? (() => {
+        const [provider, model] = currentModel.includes('/') ? currentModel.split('/') : ['', currentModel];
+        return { provider, model, full: currentModel };
+      })()
+    : null;
 
   // Show abbreviated task title when executing (max 40 chars), fallback to task ID
   const isActive = status === 'executing' || status === 'running';
@@ -201,10 +213,10 @@ export function Header({
           )}
         </box>
 
-        {/* Right section: Agent/Tracker + Progress (X/Y) with mini bar + elapsed time */}
+        {/* Right section: Agent/Tracker + Model + Progress (X/Y) with mini bar + elapsed time */}
         <box style={{ flexDirection: 'row', gap: 2, alignItems: 'center' }}>
           {/* Agent and tracker plugin names with fallback/rate limit indicators */}
-          {(agentDisplay.displayName || trackerName) && (
+          {(agentDisplay.displayName || trackerName || modelDisplay) && (
             <text fg={colors.fg.muted}>
               {agentDisplay.showRateLimitIcon && (
                 <span fg={colors.status.warning}>{RATE_LIMIT_ICON} </span>
@@ -212,7 +224,11 @@ export function Header({
               {agentDisplay.displayName && (
                 <span fg={agentDisplay.color}>{agentDisplay.displayName}</span>
               )}
-              {agentDisplay.displayName && trackerName && <span fg={colors.fg.dim}>/</span>}
+              {agentDisplay.displayName && (trackerName || modelDisplay) && <span fg={colors.fg.dim}> | </span>}
+              {modelDisplay && (
+                <span fg={colors.accent.primary}>{modelDisplay.provider}/{modelDisplay.model}</span>
+              )}
+              {(agentDisplay.displayName || modelDisplay) && trackerName && <span fg={colors.fg.dim}> | </span>}
               {trackerName && <span fg={colors.accent.tertiary}>{trackerName}</span>}
             </text>
           )}
@@ -222,6 +238,14 @@ export function Header({
               {completedTasks}/{totalTasks}
             </text>
           </box>
+          {/* Iteration counter - show current/max or current/∞ for unlimited */}
+          {currentIteration !== undefined && maxIterations !== undefined && (
+            <text fg={colors.fg.muted}>
+              <span fg={colors.fg.secondary}>
+                [{currentIteration}/{maxIterations === 0 ? '∞' : maxIterations}]
+              </span>
+            </text>
+          )}
           <text fg={colors.fg.muted}>⏱</text>
           <text fg={colors.fg.secondary}>{formattedTime}</text>
         </box>

@@ -6,6 +6,9 @@
 
 import { createCliRenderer } from '@opentui/core';
 import { createRoot } from '@opentui/react';
+import { access, readFile, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { PrdChatApp } from '../tui/components/PrdChatApp.js';
 import type { PrdCreationResult } from '../tui/components/PrdChatApp.js';
 import { loadStoredConfig, requireSetup } from '../config/index.js';
@@ -36,6 +39,10 @@ export interface CreatePrdArgs {
 
   /** Timeout for agent calls in milliseconds */
   timeout?: number;
+
+  prdSkill?: string;
+
+  prdSkillSource?: string;
 }
 
 /**
@@ -65,6 +72,8 @@ export function parseCreatePrdArgs(args: string[]): CreatePrdArgs {
       if (!isNaN(timeout)) {
         result.timeout = timeout;
       }
+    } else if (arg === '--prd-skill') {
+      result.prdSkill = args[++i];
     } else if (arg === '--help' || arg === '-h') {
       printCreatePrdHelp();
       process.exit(0);
@@ -89,6 +98,7 @@ Options:
   --output, -o <dir>     Output directory for PRD files (default: ./tasks)
   --agent, -a <name>     Agent plugin to use (default: from config)
   --timeout, -t <ms>     Timeout for AI agent calls (default: no timeout)
+  --prd-skill <name>     PRD skill folder inside skills_dir
   --force, -f            Overwrite existing files without prompting
   --help, -h             Show this help message
 
@@ -109,6 +119,67 @@ Examples:
   ralph-tui create-prd --agent claude       # Use specific agent
   ralph-tui create-prd --output ./docs      # Save PRD to custom directory
 `);
+}
+
+async function loadPrdSkillSource(
+  prdSkill: string,
+  skillsDir: string,
+  cwd: string
+): Promise<string> {
+  const resolvedSkillsDir = resolve(cwd, skillsDir);
+
+  try {
+    const stats = await stat(resolvedSkillsDir);
+    if (!stats.isDirectory()) {
+      console.error(
+        `Error: skills_dir '${skillsDir}' is not a directory at ${resolvedSkillsDir}.`
+      );
+      process.exit(1);
+    }
+  } catch {
+    console.error(
+      `Error: skills_dir '${skillsDir}' was not found or not readable at ${resolvedSkillsDir}.`
+    );
+    process.exit(1);
+  }
+
+  const skillPath = join(resolvedSkillsDir, prdSkill);
+
+  try {
+    const stats = await stat(skillPath);
+    if (!stats.isDirectory()) {
+      console.error(`Error: PRD skill '${prdSkill}' is not a directory in ${resolvedSkillsDir}.`);
+      process.exit(1);
+    }
+  } catch {
+    console.error(`Error: PRD skill '${prdSkill}' was not found in ${resolvedSkillsDir}.`);
+    process.exit(1);
+  }
+
+  const skillFile = join(skillPath, 'SKILL.md');
+
+  try {
+    await access(skillFile, constants.R_OK);
+  } catch {
+    console.error(`Error: PRD skill '${prdSkill}' is missing SKILL.md in ${skillPath}.`);
+    process.exit(1);
+  }
+
+  try {
+    const skillSource = await readFile(skillFile, 'utf-8');
+    if (!skillSource.trim()) {
+      console.error(`Error: PRD skill '${prdSkill}' has an empty SKILL.md in ${skillPath}.`);
+      process.exit(1);
+    }
+    return skillSource;
+  } catch (error) {
+    console.error(
+      `Error: Failed to read PRD skill '${prdSkill}' from ${skillFile}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    process.exit(1);
+  }
 }
 
 /**
@@ -220,6 +291,8 @@ async function runChatMode(parsedArgs: CreatePrdArgs): Promise<PrdCreationResult
         cwd={cwd}
         outputDir={outputDir}
         timeout={timeout}
+        prdSkill={parsedArgs.prdSkill}
+        prdSkillSource={parsedArgs.prdSkillSource}
         onComplete={handleComplete}
         onCancel={handleCancel}
         onError={handleError}
@@ -239,6 +312,22 @@ export async function executeCreatePrdCommand(args: string[]): Promise<void> {
 
   // Verify setup is complete before running
   await requireSetup(cwd, 'ralph-tui prime');
+
+  const storedConfig = await loadStoredConfig(cwd);
+
+  if (parsedArgs.prdSkill) {
+    if (!storedConfig.skills_dir?.trim()) {
+      console.error('Error: --prd-skill requires skills_dir to be set in config.');
+      console.error('Set skills_dir in ~/.config/ralph-tui/config.toml or .ralph-tui/config.toml.');
+      process.exit(1);
+    }
+
+    parsedArgs.prdSkillSource = await loadPrdSkillSource(
+      parsedArgs.prdSkill,
+      storedConfig.skills_dir,
+      cwd
+    );
+  }
 
   const result = await runChatMode(parsedArgs);
 
