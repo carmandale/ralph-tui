@@ -11,6 +11,12 @@ import Link from 'next/link';
 import { docsNavigation } from '@/lib/navigation';
 import { SidebarNavItem } from './SidebarNav';
 
+// Use environment variable for version (set during build)
+// Fallback to '0.0.0' for development
+const version = typeof process !== 'undefined' && process.env.npm_package_version 
+  ? process.env.npm_package_version 
+  : '0.0.0';
+
 interface SidebarProps {
   /** Additional CSS classes */
   className?: string;
@@ -43,46 +49,6 @@ export function Sidebar({ className = '' }: SidebarProps) {
         <span className="font-mono text-base font-bold tracking-tight">
           Ralph<span className="text-accent-primary">TUI</span>
         </span>
-      </div>
-
-      {/* Search placeholder - future enhancement */}
-      <div className="hidden border-b border-border px-4 py-3 md:block">
-        <div
-          className={[
-            'flex items-center gap-2',
-            'rounded-md px-3 py-2',
-            'bg-bg-secondary/50',
-            'border border-border/50',
-            'text-fg-muted',
-            'font-mono text-sm',
-            'cursor-not-allowed opacity-50',
-          ].join(' ')}
-          title="Search coming soon"
-        >
-          <svg
-            className="h-4 w-4"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
-            />
-          </svg>
-          <span>Search docs...</span>
-          <kbd
-            className={[
-              'ml-auto hidden rounded px-1.5 py-0.5 sm:inline-block',
-              'bg-bg-tertiary text-[10px] text-fg-dim',
-              'font-mono',
-            ].join(' ')}
-          >
-            /
-          </kbd>
-        </div>
       </div>
 
       {/* Navigation tree */}
@@ -132,7 +98,7 @@ export function Sidebar({ className = '' }: SidebarProps) {
               'bg-status-success/10 text-status-success',
             ].join(' ')}
           >
-            v0.1.3
+            v{version}
           </span>
         </div>
 
