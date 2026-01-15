@@ -1,0 +1,63 @@
+# Checkpoint: ralph-tui PRD Reviews
+# Generated: 2026-01-15T04:20:00Z
+
+goal: |
+  Review all 3 ralph-tui PRD sessions using rp-cli to verify implementation quality:
+  1. GMP Bug Fixes PRD (7 tasks)
+  2. MS Multi-Profile PRD (9 tasks)
+  3. MS DisplayName Rename PRD (12 tasks)
+
+now: |
+  Completed reviews of all 3 PRDs. Created beads for critical issues found.
+  Major finding: Multi-Profile PRD marked 100% complete but ZERO implementation.
+
+outcome: PARTIAL_PLUS
+
+done_this_session:
+  - Reviewed GMP PRD via rp-cli - found 2 incomplete, 1 unverifiable, 2 partial
+  - Reviewed MS Multi-Profile PRD - found ALL 9 tasks unimplemented (false positives)
+  - Reviewed MS DisplayName PRD - found cloud sync gap (local works, no GCS upload)
+  - Created bead groovetech-media-server-0ct (P1) - displayName cloud sync missing
+  - Created bead groovetech-media-server-7kv (P0) - Multi-Profile ZERO implementation
+  - Created bead groovetech-media-player-5q5 (P1) - GMP incomplete implementations
+  - Saved detailed review to thoughts/shared/handoffs/events/2026-01-15T16-06-41_displayname-review.md
+  - Synced all beads to remote
+
+next:
+  - Fix displayName cloud sync (groovetech-media-server-0ct)
+  - Implement Multi-Profile PRD from scratch (groovetech-media-server-7kv)
+  - Fix GMP incomplete tasks (groovetech-media-player-5q5)
+  - Add validation to ralph-tui to verify actual code changes before marking complete
+  - Restore ralph skill from ~/dev/ralph-loop/pi-integration/skill/SKILL.md
+
+worked:
+  - rp-cli plan mode excellent for code review against PRD requirements
+  - Creating beads immediately after finding issues preserves context
+  - Cross-repo analysis revealed integration gaps (MS→GCS→GMP flow)
+
+failed:
+  - opencode agent marked tasks complete without implementation (Multi-Profile)
+  - opencode agent missed cloud sync integration (DisplayName)
+  - ralph-tui lacks verification step before marking tasks complete
+
+blockers: []
+
+context:
+  repos_reviewed:
+    - ~/dev/groovetech-media-player (GMP)
+    - ~/dev/groovetech-media-server (MS)
+  prds:
+    gmp: ~/dev/groovetech-media-player/prd.json
+    ms_multiprofile: ~/dev/groovetech-media-server/prd.json
+    ms_displayname: ~/dev/groovetech-media-server/tasks/prd-displayname-rename.json
+  beads_created:
+    - groovetech-media-server-0ct (P1, displayName cloud sync)
+    - groovetech-media-server-7kv (P0, Multi-Profile zero impl)
+    - groovetech-media-player-5q5 (P1, GMP incomplete)
+  rp_cli_workspace: 1 (groovetech-media-server)
+
+resume_hint: |
+  Start with groovetech-media-server-7kv (P0) - the Multi-Profile PRD needs
+  complete implementation from scratch. Use the detailed implementation plan
+  in the rp-cli review output. Consider running ralph-tui again with proper
+  verification or implementing manually.
