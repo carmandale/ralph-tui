@@ -49,14 +49,32 @@ export function getClaudeSkillsDir(): string {
 
 /**
  * Get the path to the bundled skills in the ralph-tui package.
+ * This function handles both development (running from src/) and production
+ * (running from bundled dist/) environments.
  */
 export function getBundledSkillsDir(): string {
   // In ESM, we need to derive the path from import.meta.url
-  // This file is at src/setup/skill-installer.ts
-  // Skills are at skills/
   const currentDir = dirname(fileURLToPath(import.meta.url));
-  // Go up from src/setup to root, then into skills
-  return join(currentDir, '..', '..', 'skills');
+
+  // When bundled by bun, all code is in dist/cli.js (single file bundle).
+  // In that case, skills/ is a sibling directory at dist/skills/.
+  // In development, this file is at src/setup/skill-installer.ts,
+  // and skills/ is at the project root (up 2 levels).
+
+  // Check if we're in a bundled environment (dist/) by looking for
+  // skills as a sibling directory first
+  const bundledPath = join(currentDir, 'skills');
+  const devPath = join(currentDir, '..', '..', 'skills');
+
+  // Return the bundled path if it looks like we're in dist/,
+  // otherwise return the development path
+  // Note: We can't do async exists check here since function is sync,
+  // so we rely on the dist/ pattern in the path
+  if (currentDir.includes('/dist') || currentDir.endsWith('/dist')) {
+    return bundledPath;
+  }
+
+  return devPath;
 }
 
 /**
