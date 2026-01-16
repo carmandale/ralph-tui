@@ -9,15 +9,15 @@ import { access, constants } from 'node:fs/promises';
 import { join } from 'node:path';
 import { BaseTrackerPlugin } from '../base.js';
 import type {
-  TrackerPluginMeta,
+  SetupQuestion,
+  SyncResult,
+  TaskCompletionResult,
+  TaskFilter,
+  TaskPriority,
   TrackerPluginFactory,
+  TrackerPluginMeta,
   TrackerTask,
   TrackerTaskStatus,
-  TaskPriority,
-  TaskFilter,
-  TaskCompletionResult,
-  SyncResult,
-  SetupQuestion,
 } from '../types.js';
 
 /**
@@ -428,7 +428,8 @@ export class BeadsTrackerPlugin extends BaseTrackerPlugin {
     id: string,
     reason?: string
   ): Promise<TaskCompletionResult> {
-    const args = ['update', id, '--status', 'closed'];
+    // Use --force to close tasks even if parent epic is still open
+    const args = ['close', id, '--force'];
 
     if (reason) {
       args.push('--reason', reason);

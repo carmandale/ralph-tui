@@ -832,10 +832,28 @@ export function RunApp({
           break;
 
         case 's':
-          // Start execution when in ready state
+          // Start/continue execution - 's' always means "keep going"
           if (status === 'ready' && onStart) {
+            // First start - use onStart callback
             setStatus('running');
             onStart();
+          } else if ((status === 'stopped' || status === 'idle') && engine) {
+            // Continue after stop - use engine.continueExecution()
+            if (currentIteration >= maxIterations) {
+              // At max iterations, add one more then continue
+              engine.addIterations(1).then((shouldContinue) => {
+                if (shouldContinue) {
+                  setStatus('running');
+                  engine.continueExecution();
+                }
+              }).catch((err) => {
+                console.error('Failed to add iteration:', err);
+              });
+            } else {
+              // Have iterations remaining, just continue
+              setStatus('running');
+              engine.continueExecution();
+            }
           }
           break;
 
