@@ -6,6 +6,7 @@
 
 import type { ReactNode } from 'react';
 import { colors, statusIndicators, layout, type RalphStatus } from '../theme.js';
+import type { SandboxConfig } from '../../config/types.js';
 
 /**
  * Props for the ProgressDashboard component
@@ -25,6 +26,8 @@ export interface ProgressDashboardProps {
   currentTaskId?: string;
   /** Current task title being worked on (if any) */
   currentTaskTitle?: string;
+  /** Sandbox configuration (if sandboxing is enabled) */
+  sandboxConfig?: SandboxConfig;
 }
 
 /**
@@ -34,6 +37,23 @@ function truncateText(text: string, maxWidth: number): string {
   if (text.length <= maxWidth) return text;
   if (maxWidth <= 3) return text.slice(0, maxWidth);
   return text.slice(0, maxWidth - 1) + '…';
+}
+
+/**
+ * Get sandbox display string from config
+ */
+function getSandboxDisplay(sandboxConfig?: SandboxConfig): string | null {
+  if (!sandboxConfig?.enabled) {
+    return null;
+  }
+
+  const mode = sandboxConfig.mode ?? 'auto';
+  if (mode === 'off') {
+    return null;
+  }
+
+  const networkSuffix = sandboxConfig.network === false ? ' (no-net)' : '';
+  return `${mode}${networkSuffix}`;
 }
 
 /**
@@ -81,8 +101,10 @@ export function ProgressDashboard({
   epicName,
   currentTaskId,
   currentTaskTitle,
+  sandboxConfig,
 }: ProgressDashboardProps): ReactNode {
   const statusDisplay = getStatusDisplay(status, currentTaskId);
+  const sandboxDisplay = getSandboxDisplay(sandboxConfig);
 
   // Show current task title when executing
   const taskDisplay = currentTaskTitle && (status === 'executing' || status === 'running')
@@ -133,6 +155,13 @@ export function ProgressDashboard({
           <text fg={colors.fg.muted}> | </text>
           <text fg={colors.fg.secondary}>Tracker: </text>
           <text fg={colors.accent.tertiary}>{trackerName}</text>
+          {sandboxDisplay && (
+            <>
+              <text fg={colors.fg.muted}> | </text>
+              <text fg={colors.fg.secondary}>Sandbox: </text>
+              <text fg={colors.status.info}>{sandboxDisplay}</text>
+            </>
+          )}
         </box>
       </box>
 

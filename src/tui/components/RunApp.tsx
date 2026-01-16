@@ -1189,6 +1189,7 @@ export function RunApp({
           epicName={epicName}
           currentTaskId={currentTaskId}
           currentTaskTitle={currentTaskTitle}
+          sandboxConfig={sandboxConfig}
         />
       )}
 
@@ -1212,6 +1213,7 @@ export function RunApp({
             subagentTree={iterationDetailSubagentTree}
             subagentStats={iterationDetailSubagentStats}
             subagentTraceLoading={iterationDetailSubagentLoading}
+            sandboxConfig={sandboxConfig}
           />
         ) : viewMode === 'tasks' ? (
           <>
