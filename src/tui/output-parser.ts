@@ -13,7 +13,7 @@ import {
   parseDroidJsonlLine,
   type DroidJsonlMessage,
 } from '../plugins/agents/droid/outputParser.js';
-import type { FormattedSegment } from '../plugins/agents/output-formatting.js';
+import { stripAnsiCodes, type FormattedSegment } from '../plugins/agents/output-formatting.js';
 
 /**
  * Known JSONL event types from agent output.
@@ -164,14 +164,15 @@ export function parseAgentOutput(rawOutput: string, agentPlugin?: string): strin
     // Filter to get only the meaningful results (not just partial outputs)
     const meaningfulParts = parsedParts.filter((p) => p.length > 50);
     if (meaningfulParts.length > 0) {
-      return meaningfulParts[meaningfulParts.length - 1]!;
+      // Strip ANSI codes - legacy formatters use ANSI which causes TUI artifacts
+      return stripAnsiCodes(meaningfulParts[meaningfulParts.length - 1]!);
     }
-    return parsedParts[parsedParts.length - 1]!;
+    return stripAnsiCodes(parsedParts[parsedParts.length - 1]!);
   }
 
   // If we have plain text lines and no JSONL, return the plain text
   if (plainTextLines.length > 0) {
-    return plainTextLines.join('\n');
+    return stripAnsiCodes(plainTextLines.join('\n'));
   }
 
   // Fallback: return raw output truncated if it looks like unparseable JSON
@@ -180,7 +181,7 @@ export function parseAgentOutput(rawOutput: string, agentPlugin?: string): strin
            rawOutput.slice(0, 200) + '...\n[truncated]';
   }
 
-  return rawOutput;
+  return stripAnsiCodes(rawOutput);
 }
 
 /**
@@ -338,13 +339,14 @@ export class StreamingOutputParser {
         const droidDisplay = formatDroidEventForDisplay(droidResult.message);
 
         if (droidDisplay && costSummary) {
-          return `${droidDisplay}\n${costSummary}`;
+          // Strip ANSI codes - legacy formatters use ANSI which causes TUI artifacts
+          return stripAnsiCodes(`${droidDisplay}\n${costSummary}`);
         }
         if (droidDisplay) {
-          return droidDisplay;
+          return stripAnsiCodes(droidDisplay);
         }
         if (costSummary) {
-          return costSummary;
+          return costSummary; // Cost summary doesn't contain ANSI codes
         }
         // Droid event was recognized but nothing to display (e.g., user input echo)
         // Return undefined to skip rather than falling through to generic parsing

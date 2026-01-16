@@ -397,3 +397,14 @@ export function processAgentEventsToSegments(events: AgentDisplayEvent[]): Forma
 export function segmentsToPlainText(segments: FormattedSegment[]): string {
   return segments.map(s => s.text).join('');
 }
+
+/**
+ * Strip ANSI escape sequences from a string.
+ * Used to clean output for TUI rendering where ANSI codes would cause artifacts.
+ * Matches: ESC[...letter, ESC]...BEL, and mode-switching sequences.
+ */
+const ANSI_REGEX = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][AB012]|\[\?[0-9;]*[a-zA-Z]/g;
+
+export function stripAnsiCodes(str: string): string {
+  return str.replace(ANSI_REGEX, '');
+}
