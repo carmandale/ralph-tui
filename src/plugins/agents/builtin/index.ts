@@ -7,6 +7,7 @@ import { getAgentRegistry } from '../registry.js';
 import createDroidAgent from '../droid/index.js';
 import createClaudeAgent from './claude.js';
 import createOpenCodeAgent from './opencode.js';
+import createCodexAgent from './codex.js';
 
 /**
  * Register all built-in agent plugins with the registry.
@@ -18,12 +19,16 @@ export function registerBuiltinAgents(): void {
   // Register built-in plugins
   registry.registerBuiltin(createClaudeAgent);
   registry.registerBuiltin(createOpenCodeAgent);
+  registry.registerBuiltin(createCodexAgent);
   registry.registerBuiltin(createDroidAgent);
 }
 
 // Export the factory functions for direct use
-export { createClaudeAgent, createOpenCodeAgent, createDroidAgent };
+export { createClaudeAgent, createOpenCodeAgent, createCodexAgent, createDroidAgent };
 
 // Export Claude JSONL parsing types and utilities
 export type { ClaudeJsonlMessage, JsonlParseResult } from './claude.js';
 export { ClaudeAgentPlugin } from './claude.js';
+
+// Export Codex plugin class for direct use
+export { CodexAgentPlugin } from './codex.js';
