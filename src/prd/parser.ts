@@ -331,17 +331,20 @@ export function parsePrdMarkdown(
   markdown: string,
   options: ParseOptions = {}
 ): ParsedPrd {
+  // Normalize line endings (handle Windows CRLF)
+  const normalizedMarkdown = markdown.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
   const warnings: string[] = [];
   const storyPrefix = options.storyPrefix || 'US-';
 
   // Extract top-level information
-  const name = extractTitle(markdown);
-  const description = extractDescription(markdown);
-  const branchName = extractBranchName(markdown);
-  const createdAt = extractCreatedAt(markdown);
+  const name = extractTitle(normalizedMarkdown);
+  const description = extractDescription(normalizedMarkdown);
+  const branchName = extractBranchName(normalizedMarkdown);
+  const createdAt = extractCreatedAt(normalizedMarkdown);
 
   // Find all user story sections
-  const storySections = findUserStorySections(markdown);
+  const storySections = findUserStorySections(normalizedMarkdown);
 
   if (storySections.length === 0) {
     warnings.push(`No user stories found with pattern "### ${storyPrefix}XXX: Title"`);
