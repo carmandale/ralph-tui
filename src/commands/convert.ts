@@ -23,6 +23,7 @@ import {
   validatePrdJsonSchema,
   PrdJsonSchemaError,
 } from '../plugins/trackers/builtin/json/index.js';
+import { loadStoredConfig } from '../config/index.js';
 
 /**
  * Supported conversion target formats.
@@ -236,9 +237,8 @@ async function convertToBeads(
 ): Promise<BeadsConversionResult> {
   const storyIds: string[] = [];
 
-  // Ensure 'ralph' label is always included
-  const allLabels = ['ralph', ...labels.filter((l) => l !== 'ralph')];
-  const labelsStr = allLabels.join(',');
+  // Use provided labels (already resolved from config or CLI)
+  const labelsStr = labels.join(',');
 
   // Step 1: Create the epic bead
   printInfo('Creating epic bead...');
@@ -554,7 +554,7 @@ async function executeJsonConversion(
  */
 async function executeBeadsConversion(
   parsed: import('../prd/parser.js').ParsedPrd,
-  labels: string[],
+  cliLabels: string[],
   verbose: boolean
 ): Promise<void> {
   // Check that beads is available
@@ -563,6 +563,34 @@ async function executeBeadsConversion(
     printError(`bd command not available: ${stderr}`);
     printInfo('Make sure beads is installed and the bd command is in your PATH');
     process.exit(1);
+  }
+
+  // Load config to get configured labels from trackerOptions
+  const config = await loadStoredConfig();
+  const trackerOptions = config.trackerOptions as Record<string, unknown> | undefined;
+  const configuredLabels = trackerOptions?.labels;
+  
+  // Merge labels: CLI labels take precedence, then config labels, fallback to 'ralph'
+  let labels: string[];
+  if (cliLabels.length > 0) {
+    // CLI labels provided - use them
+    labels = cliLabels;
+  } else if (configuredLabels) {
+    // Use configured labels from trackerOptions
+    if (typeof configuredLabels === 'string') {
+      labels = configuredLabels.split(',').map((l) => l.trim()).filter((l) => l.length > 0);
+    } else if (Array.isArray(configuredLabels)) {
+      labels = configuredLabels.filter((l): l is string => typeof l === 'string' && l.length > 0);
+    } else {
+      labels = ['ralph'];
+    }
+  } else {
+    // Fallback to 'ralph' if no labels configured
+    labels = ['ralph'];
+  }
+
+  if (verbose) {
+    printInfo(`Using labels: ${labels.join(', ')}`);
   }
 
   // Perform the conversion

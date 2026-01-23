@@ -27,6 +27,18 @@ import type {
  * Returns AgentDisplayEvent[] - the shared processAgentEvents decides what to show.
  *
  * Codex CLI --json format emits events like:
+ * NEW FORMAT (2025+):
+ * - thread.started: Session start with thread_id
+ * - turn.started: Agent turn begins
+ * - item.completed: Completed item with { item: { id, type, text } }
+ *   - type: "reasoning" = thinking/reasoning text
+ *   - type: "message" = regular assistant message
+ *   - type: "function_call" = tool call
+ *   - type: "function_call_output" = tool result
+ * - thread.completed: Session end
+ * - error: Error events
+ *
+ * LEGACY FORMAT:
  * - message/content events for LLM output
  * - tool_call for tool invocations
  * - tool_result for tool outputs
@@ -43,6 +55,71 @@ function parseCodexJsonLine(jsonLine: string): AgentDisplayEvent[] {
     const eventType = event.type as string | undefined;
 
     switch (eventType) {
+      // ========== NEW FORMAT (2025+) ==========
+      case 'thread.started':
+      case 'turn.started':
+      case 'thread.completed':
+      case 'turn.completed': {
+        // System lifecycle events - skip for display
+        events.push({ type: 'system', subtype: eventType });
+        break;
+      }
+
+      case 'item.completed': {
+        // Item completed - extract content based on item type
+        const item = event.item as Record<string, unknown> | undefined;
+        if (item) {
+          const itemType = item.type as string | undefined;
+          const text = item.text as string | undefined;
+
+          switch (itemType) {
+            case 'reasoning': {
+              // Reasoning/thinking text - display as regular text
+              if (text) {
+                events.push({ type: 'text', content: text });
+              }
+              break;
+            }
+            case 'message': {
+              // Regular assistant message
+              if (text) {
+                events.push({ type: 'text', content: text });
+              }
+              break;
+            }
+            case 'function_call': {
+              // Tool call
+              const name = (item.name as string) || 'unknown';
+              const args = item.arguments as Record<string, unknown> | undefined;
+              // Parse arguments if it's a JSON string
+              let input = args;
+              if (typeof args === 'string') {
+                try {
+                  input = JSON.parse(args) as Record<string, unknown>;
+                } catch {
+                  input = { command: args };
+                }
+              }
+              events.push({ type: 'tool_use', name, input });
+              break;
+            }
+            case 'function_call_output': {
+              // Tool result - skip display (tool_result type is skipped by formatter)
+              events.push({ type: 'tool_result' });
+              break;
+            }
+            default: {
+              // Other item types - try to extract text
+              if (text) {
+                events.push({ type: 'text', content: text });
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      // ========== LEGACY FORMAT ==========
       case 'message':
       case 'content':
       case 'text': {
