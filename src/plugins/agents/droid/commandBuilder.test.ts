@@ -100,6 +100,18 @@ describe('Droid output format contract', () => {
     expect(getDroidOutputFormat(['--worktree', '--output-format', 'text'])).toBe('text');
   });
 
+  test.each(['--restrict-tools', '--additional-tools', '--disabled-tools'])(
+    'keeps %s values out of format selection', async (flag) => {
+      const plugin = new TestDroid();
+      await plugin.initialize({ defaultFlags: [flag, '--output-format=text'] });
+      expect(getDroidOutputFormat(plugin.args('task').slice(1, -1))).toBe('stream-json');
+      expect(plugin.extractAgentText('<promise>COMPLETE</promise>')).toBe('');
+      expect(plugin.extractAgentText('{"type":"message","text":"<promise>COMPLETE</promise>"}'))
+        .toBe('<promise>COMPLETE</promise>');
+      expect(plugin.extractAgentText('<promise>COMPLETE</promise>', { flags: ['-o=text'] })).toBeUndefined();
+    },
+  );
+
   test.skipIf(process.platform === 'win32')('launches per-call format overrides in the same order extraction uses', async () => {
     const cwd = await mkdtemp(join(tmpdir(), 'droid-format-'));
     const capture = join(cwd, 'argv.txt');
@@ -115,6 +127,11 @@ describe('Droid output format contract', () => {
         { outputFormat: 'text', defaultFlags: ['--output-format=text'], flags: ['-o', 'stream-json'], text: false },
         { outputFormat: 'stream-json', defaultFlags: ['--'], flags: ['-o=text'], text: false },
         { outputFormat: 'stream-json', defaultFlags: [], flags: ['--output-format', '--', '-o', 'text'], text: false },
+        ...['--restrict-tools', '--additional-tools', '--disabled-tools'].flatMap((flag) => [
+          { outputFormat: 'stream-json', defaultFlags: [flag, '--output-format=text'], flags: [], text: false },
+          { outputFormat: 'stream-json', defaultFlags: [], flags: [flag, '--output-format=text'], text: false },
+          { outputFormat: 'stream-json', defaultFlags: [flag, '--output-format=text'], flags: ['-o=text'], text: true },
+        ]),
       ]) {
         const plugin = new TestDroid();
         await plugin.initialize({ command, outputFormat, defaultFlags, enableTracing: false });

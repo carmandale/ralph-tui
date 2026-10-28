@@ -20,6 +20,7 @@ export interface DroidCommandArgs {
 const VALUE_FLAGS = new Set([
   '-f', '--file', '-m', '--model', '-s', '--session-id', '--auto',
   '--only-tools', '--add-tools', '--remove-tools', '--input-format',
+  '--restrict-tools', '--additional-tools', '--disabled-tools',
   '-r', '--reasoning-effort', '--spec-model', '--spec-reasoning-effort', '--cwd',
   '-w', '--worktree', '--tag', '--log-group-id', '--fork',
   '--worker-model', '--worker-reasoning-effort', '--validator-model', '--validator-reasoning-effort',
