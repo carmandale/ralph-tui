@@ -420,7 +420,7 @@ export function extractAgentTextFromEvents(events: AgentDisplayEvent[]): string 
   const groups: string[] = [];
   let text = '';
   for (const event of events) {
-    if (event.type === 'text') {
+    if (event.type === 'text' && typeof event.content === 'string') {
       text += event.content;
     } else if (text) {
       groups.push(text);

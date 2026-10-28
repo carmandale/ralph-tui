@@ -148,6 +148,56 @@ describe('parseDroidJsonlLine', () => {
 });
 
 describe('DroidAgentPlugin.extractAgentText', () => {
+  const marker = '<promise>COMPLETE</promise>';
+
+  test('retains supported message, completion, and successful result fields', () => {
+    const plugin = new DroidAgentPlugin();
+    for (const record of [
+      { type: 'message', role: 'assistant', message: marker },
+      { type: 'message', role: 'assistant', text: marker },
+      { type: 'message', role: 'assistant', content: marker },
+      { type: 'message', role: 'assistant', delta: marker },
+      { type: 'message', role: 'assistant', content: [
+        { type: 'text', text: '<promise>' }, { type: 'text', text: 'COMPLETE</promise>' },
+      ] },
+      { type: 'completion', finalText: marker },
+      { type: 'completion', final_text: marker },
+      { type: 'result', subtype: 'success', is_error: false, result: marker },
+    ]) {
+      expect(plugin.extractAgentText(JSON.stringify(record))).toBe(marker);
+    }
+  });
+
+  test('does not flatten malformed scalar fields or ambiguous content objects', () => {
+    const plugin = new DroidAgentPlugin();
+    for (const record of [
+      { type: 'message', text: [{ type: 'text', text: marker }] },
+      { type: 'message', message: { type: 'thinking', text: marker } },
+      { type: 'message', content: { type: 'text', text: marker } },
+      { type: 'message', content: [{ type: 'text', role: 'system', text: marker }] },
+      { type: 'message', message: null, text: marker },
+      { type: 'completion', finalText: [marker] },
+      { type: 'result', subtype: 'success', result: [marker] },
+    ]) {
+      expect(plugin.extractAgentText(JSON.stringify(record))).toBe('');
+    }
+  });
+
+  test('does not join text across records that also carry tools', () => {
+    const plugin = new DroidAgentPlugin();
+    for (const tools of [
+      { tool_calls: [{ name: 'Read', arguments: {} }] },
+      { tool_results: [{ id: 'tool-1', content: 'file content' }] },
+    ]) {
+      const stdout = [
+        { type: 'message', text: '<promise>' },
+        { type: 'message', text: '', ...tools },
+        { type: 'message', text: 'COMPLETE</promise>' },
+      ].map((record) => JSON.stringify(record)).join('\n');
+      expect(plugin.extractAgentText(stdout)).not.toMatch(/<promise>\s*COMPLETE\s*<\/promise>/i);
+    }
+  });
+
   test('excludes top-level tool-result markers and keeps assistant markers', () => {
     const plugin = new DroidAgentPlugin();
     const toolResult = JSON.stringify({

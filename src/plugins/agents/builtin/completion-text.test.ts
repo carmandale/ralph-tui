@@ -131,6 +131,14 @@ const cases = [
       { type: 'result', error_message: marker, final_text: marker },
       { type: 'result', errorMessage: marker, output: marker },
       { type: 'error', message: marker },
+      { type: 'system', message: marker },
+      { type: 'thinking', text: marker },
+      { type: 'usage', message: marker },
+      { role: 'system', content: marker },
+      { role: 'assistant', content: marker },
+      { type: 'future', message: marker },
+      { type: 'message', role: 'system', content: marker },
+      { type: 'message', role: 'unknown', text: marker },
     ],
   },
 ];
@@ -149,6 +157,16 @@ test.each([new ClaudeAgentPlugin(), new DroidAgentPlugin()])(
 
 for (const { plugin, narrative, ignored } of cases) {
   describe(`${plugin.meta.id} completion text`, () => {
+    test.each([[marker], { text: marker }, null, [], 42, true].map((value) => ({ value })))(
+      'rejects malformed narrative fields and preserves their boundary: %j',
+      ({ value }) => {
+        const invalid = narrative(value as unknown as string);
+        expect(plugin.extractAgentText(jsonl([invalid]), { subagentTracing: true })).toBe('');
+        expect(plugin.extractAgentText(jsonl([
+          narrative('<promise>'), invalid, narrative('COMPLETE</promise>'),
+        ]), { subagentTracing: true })).not.toMatch(completionPattern);
+      }
+    );
     test.each(ignored.map((record, index) => [index, record] as const))(
       'excludes non-narrative record %i without falling back to raw stdout',
       (_index, record) => {
@@ -225,19 +243,28 @@ describe('explicit plain-text modes', () => {
   });
 });
 
-for (const id of ['claude', 'cursor', 'kimi', 'pi']) {
+for (const id of ['claude', 'cursor', 'kimi', 'pi', 'droid']) {
   const plugin = cases.find((item) => item.plugin.meta.id === id)!.plugin;
   const record = (content: unknown[]) => id === 'kimi'
     ? { role: 'assistant', content }
+    : id === 'droid' ? { type: 'message', role: 'assistant', content }
     : { type: id === 'pi' ? 'message_end' : 'assistant', message: { role: 'assistant', content } };
 
   test(`${id} preserves adjacent text blocks but not hidden content boundaries`, () => {
     const before = { type: 'text', text: '<promise>' };
     const after = { type: 'text', text: 'COMPLETE</promise>' };
     expect(plugin.extractAgentText(jsonl([record([before, after])]))).toBe(marker);
-    expect(plugin.extractAgentText(jsonl([
-      record([before, { type: 'thinking', thinking: 'Private reasoning' }, after]),
-    ]))).not.toMatch(/<promise>\s*COMPLETE\s*<\/promise>/i);
+    for (const block of [
+      { type: 'thinking', thinking: 'Private reasoning' },
+      { type: 'tool_use', name: 'Read', input: { text: marker } },
+      { type: 'redacted_thinking', data: 'Private reasoning' },
+      { type: 'unknown', text: marker },
+      { type: 'text', text: [marker] },
+      null,
+      marker,
+    ]) {
+      expect(plugin.extractAgentText(jsonl([record([before, block, after])]))).not.toMatch(completionPattern);
+    }
   });
 }
 

@@ -46,6 +46,19 @@ describe('completion text extraction', () => {
     expect(extractAgentTextFromJsonl('plain text', () => [], undefined, true)).toBeUndefined();
   });
 
+  test.each([['<promise>COMPLETE</promise>'], { text: '<promise>COMPLETE</promise>' }, null, undefined, [], 42, true]
+    .map((content) => ({ content })))(
+    'rejects malformed text events without coercion or boundary loss: %j',
+    ({ content }) => {
+      const invalid = { type: 'text' as const, content: content as unknown as string };
+      expect(extractAgentTextFromEvents([invalid])).toBe('');
+      expect(extractAgentTextFromEvents([
+        { type: 'text', content: '<promise>' }, invalid,
+        { type: 'text', content: 'COMPLETE</promise>' },
+      ])).toBe('<promise>\0COMPLETE</promise>');
+    }
+  );
+
   test('separates text across unstructured lines inside JSONL', () => {
     const stdout = '{"type":"text","text":"<promise>"}\n[plugin log]\n{"type":"text","text":"COMPLETE</promise>"}';
     const text = extractAgentTextFromJsonl(stdout, (line) => [

@@ -584,6 +584,50 @@ export function parseDroidMessageToEvents(message: DroidJsonlMessage): AgentDisp
   return events;
 }
 
+/** Extract completion narrative without the display parser's permissive flattening. */
+export function parseDroidCompletionEvents(message: DroidJsonlMessage): AgentDisplayEvent[] {
+  const { raw } = message;
+  const type = message.type?.toLowerCase();
+  const role = typeof raw.role === 'string' ? raw.role.toLowerCase() : raw.role;
+  const boundary: AgentDisplayEvent = { type: 'system' };
+  if (
+    !['message', 'completion', 'result'].includes(type ?? '') ||
+    (role !== undefined && role !== 'assistant') ||
+    raw.is_error === true || raw.error || raw.error_message || raw.errorMessage ||
+    raw.status === 'error' || raw.status === 'failed' ||
+    (typeof raw.subtype === 'string' && raw.subtype.startsWith('error_'))
+  ) {
+    return [boundary];
+  }
+
+  const fields = type === 'message'
+    ? ['message', 'content', 'delta', 'text']
+    : ['result', 'output', 'finalText', 'final_text'];
+  const field = fields.find((key) => Object.prototype.hasOwnProperty.call(raw, key));
+  const content = field ? raw[field] : undefined;
+  const events: AgentDisplayEvent[] = [];
+  if (typeof content === 'string') {
+    events.push({ type: 'text', content });
+  } else if (type === 'message' && field === 'content' && Array.isArray(content)) {
+    for (const value of content) {
+      const block = asRecord(value);
+      if (block?.type === 'text' && typeof block.text === 'string' &&
+          (block.role === undefined || block.role === 'assistant')) {
+        events.push({ type: 'text', content: block.text });
+      } else {
+        events.push(boundary);
+      }
+    }
+  }
+
+  const hasTools = !!(message.toolCalls?.length || message.toolResults?.length);
+  return [
+    ...(type !== 'message' || hasTools ? [boundary] : []),
+    ...(events.length ? events : [boundary]),
+    ...(hasTools ? [boundary] : []),
+  ];
+}
+
 /**
  * Format a DroidJsonlMessage for display using shared logic.
  * @deprecated Use parseDroidMessageToEvents + processAgentEvents instead
