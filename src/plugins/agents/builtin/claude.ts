@@ -442,6 +442,10 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
     return extractAgentTextFromJsonl(stdout, (line) => {
       const event = JSON.parse(line) as Record<string, unknown>;
       if (event.type === 'result' && typeof event.result === 'string') {
+        if (event.is_error === true || event.error ||
+            (typeof event.subtype === 'string' && event.subtype.startsWith('error_'))) {
+          return [{ type: 'system' }];
+        }
         return [{ type: 'system' }, { type: 'text', content: event.result }];
       }
       return this.parseClaudeJsonLine(line);

@@ -165,7 +165,11 @@ describe('ExecutionEngine', () => {
       { kind: 'thinking', printMode: 'text', tracing: true, completed: false },
       { kind: 'plain', printMode: 'text', tracing: false, completed: true },
       { kind: 'adjacent', printMode: 'stream', tracing: false, completed: true },
-    ])('handles actual capped Claude capture: $kind/$printMode/tracing=$tracing', async ({ kind, printMode, tracing, completed }) => {
+      { kind: 'result-error', printMode: 'stream', tracing: true, completed: false },
+      { kind: 'result-error-subtype', printMode: 'stream', tracing: true, completed: false },
+      { kind: 'result-error-metadata', printMode: 'stream', tracing: true, completed: false },
+      { kind: 'result-success', printMode: 'stream', tracing: true, completed: true },
+    ])('handles actual Claude capture: $kind/$printMode/tracing=$tracing', async ({ kind, printMode, tracing, completed }) => {
       const directory = await mkdtemp(join(tmpdir(), 'ralph-completion-capture-'));
       try {
         const marker = '<promise>COMPLETE</promise>';
@@ -179,10 +183,17 @@ describe('ExecutionEngine', () => {
           type: kind === 'tool_result' ? 'user' : 'assistant',
           message: { content: [block] },
         });
-        const stdout = kind === 'plain' ? payload : kind === 'adjacent'
+        const resultRecord = kind.startsWith('result-') ? JSON.stringify({
+          type: 'result', result: marker,
+          ...(kind === 'result-error' ? { is_error: true, subtype: 'error_during_execution' } : {}),
+          ...(kind === 'result-error-subtype' ? { subtype: 'error_max_turns' } : {}),
+          ...(kind === 'result-error-metadata' ? { error: { message: marker } } : {}),
+          ...(kind === 'result-success' ? { is_error: false, subtype: 'success' } : {}),
+        }) : undefined;
+        const stdout = resultRecord ?? (kind === 'plain' ? payload : kind === 'adjacent'
           ? [record, ...['<promise>COM', 'PLETE</promise>'].map((text) => JSON.stringify({
             type: 'assistant', message: { content: [{ type: 'text', text }] },
-          }))].join('\n') : record;
+          }))].join('\n') : record);
         const fixture = join(directory, 'stdout.jsonl');
         await writeFile(fixture, stdout + '\n');
         const plugin = new class extends ClaudeAgentPlugin {
@@ -194,12 +205,14 @@ describe('ExecutionEngine', () => {
         await plugin.initialize({ command: process.execPath, printMode, skipPermissions: false });
         let captured = '';
         let exitCode: number | undefined;
+        let status: string | undefined;
         const execute = plugin.execute.bind(plugin);
         plugin.execute = (...args) => {
           const handle = execute(...args);
           return { ...handle, promise: handle.promise.then((result) => {
             captured = result.stdout;
             exitCode = result.exitCode;
+            status = result.status;
             return result;
           }) };
         };
@@ -217,8 +230,9 @@ describe('ExecutionEngine', () => {
         const result = await internals.runIteration(task);
 
         expect(exitCode).toBe(0);
-        expect(captured.length).toBe(2_000_000);
-        expect(captured.startsWith('[...agent output truncated in memory...]\n')).toBe(true);
+        expect(status).toBe('completed');
+        expect(captured.length).toBe(Math.min(2_000_000, stdout.length + 1));
+        expect(captured.startsWith('[...agent output truncated in memory...]\n')).toBe(stdout.length + 1 > 2_000_000);
         expect(captured).toContain(marker);
         expect(result.taskCompleted).toBe(completed);
         expect(completeCalls).toEqual(completed ? [task.id] : []);

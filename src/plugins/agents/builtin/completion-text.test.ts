@@ -37,6 +37,9 @@ const cases = [
       { type: 'user', message: { content: [{ type: 'tool_result', content: marker }] } },
       { type: 'system', prompt: marker },
       { type: 'result', metadata: marker },
+      { type: 'result', is_error: true, subtype: 'error_during_execution', result: marker },
+      { type: 'result', subtype: 'error_max_turns', result: marker },
+      { type: 'result', error: { message: marker }, result: marker },
     ],
   },
   {
@@ -122,9 +125,27 @@ const cases = [
       { kind: 'tool-result', content: marker },
       { role: 'user', content: marker },
       { type: 'usage', tokens: 12 },
+      { type: 'result', is_error: true, result: marker },
+      { event: 'result', subtype: 'error_during_execution', result: marker },
+      { kind: 'result', error: { message: marker }, result: marker },
+      { type: 'result', error_message: marker, final_text: marker },
+      { type: 'result', errorMessage: marker, output: marker },
+      { type: 'error', message: marker },
     ],
   },
 ];
+
+test.each([new ClaudeAgentPlugin(), new DroidAgentPlugin()])(
+  '%s preserves successful final-result narrative',
+  (plugin) => {
+    for (const record of [
+      { type: 'result', result: marker },
+      { type: 'result', is_error: false, subtype: 'success', result: marker },
+    ]) {
+      expect(plugin.extractAgentText(jsonl([record]), { subagentTracing: true })).toBe(marker);
+    }
+  }
+);
 
 for (const { plugin, narrative, ignored } of cases) {
   describe(`${plugin.meta.id} completion text`, () => {

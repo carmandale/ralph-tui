@@ -153,6 +153,14 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
       if (!result.success) {
         return result.raw.trim() ? [{ type: 'system' }] : [];
       }
+      const { message } = result;
+      const { raw } = message;
+      const type = message.type?.toLowerCase();
+      const isErrorResult = raw.is_error === true || raw.error || raw.error_message || raw.errorMessage ||
+        (typeof raw.subtype === 'string' && raw.subtype.startsWith('error_'));
+      if (type === 'error' || ((type === 'result' || message.result !== undefined) && isErrorResult)) {
+        return [{ type: 'system' }];
+      }
       const parsed = parseDroidMessageToEvents(result.message);
       return parsed.length ? parsed : [{ type: 'system' }];
     });
