@@ -6,7 +6,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { BaseAgentPlugin, findCommandPath } from '../base.js';
+import { BaseAgentPlugin, findCommandPath, quoteForWindowsShell, shouldUseWindowsShell } from '../base.js';
 import { processAgentEvents, processAgentEventsToSegments, type AgentDisplayEvent } from '../output-formatting.js';
 import type {
   AgentPluginMeta,
@@ -157,7 +157,9 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
     command: string
   ): Promise<{ success: boolean; version?: string; error?: string }> {
     return new Promise((resolve) => {
-      execFile(command, ['--version'], { timeout: 5000, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
+      const shell = shouldUseWindowsShell(command);
+      const executable = shell ? quoteForWindowsShell(command) : command;
+      execFile(executable, ['--version'], { shell, timeout: 5000, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
         if (error) {
           resolve({
             success: false,
@@ -282,18 +284,21 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
       onStdout: (chunk) => emit(parser.push(chunk)),
       onEnd: (result) => {
         const parsed = AmpcodeAgentPlugin.parseJsonlOutput(result.stdout);
-        const failure = parsed.messages.find(({ raw }) => raw.type === 'result' && raw.is_error === true);
+        const failure = parsed.messages.find(({ raw }) => AmpcodeAgentPlugin.isErrorResult(raw));
         // The engine scans stdout for completion: never expose tool input, hidden
         // content, or malformed protocol lines as assistant narrative.
         if (failure && result.status === 'completed') {
           result.status = 'failed';
-          result.error = typeof failure.raw.result === 'string' ? failure.raw.result : 'Amp execute failed';
+          result.error = AmpcodeAgentPlugin.errorMessage(failure.raw);
         }
         result.stdout = result.status === 'completed'
           ? parsed.messages.map(({ raw }) => AmpcodeAgentPlugin.completionText(raw)).join('\n')
           : '';
-        emit(parser.flush());
-        options?.onEnd?.(result);
+        try {
+          emit(parser.flush());
+        } finally {
+          options?.onEnd?.(result);
+        }
       },
     });
   }
@@ -303,7 +308,7 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
     if (!message || typeof message !== 'object' || Array.isArray(message)) return [];
     const content = (message as Record<string, unknown>).content;
     return Array.isArray(content)
-      ? content.filter((block): block is Record<string, unknown> => Boolean(block) && typeof block === 'object' && !Array.isArray(block))
+      ? content.map((block) => block && typeof block === 'object' && !Array.isArray(block) ? block as Record<string, unknown> : {})
       : [];
   }
 
@@ -311,8 +316,8 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
     if (raw.parent_tool_use_id) return '';
     if (raw.type === 'assistant') {
       return AmpcodeAgentPlugin.contentBlocks(raw)
-        .map((block) => block.type === 'text' && typeof block.text === 'string' ? block.text : '')
-        .join('\n');
+        .map((block) => block.type === 'text' && typeof block.text === 'string' ? block.text : '\n')
+        .join('');
     }
     if (raw.type === 'result' && raw.is_error !== true && raw.subtype === 'success' && typeof raw.result === 'string') {
       return raw.result;
@@ -320,9 +325,19 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
     return '';
   }
 
+  private static isErrorResult(raw: Record<string, unknown>): boolean {
+    return raw.type === 'result' && (raw.is_error === true ||
+      typeof raw.subtype === 'string' && (raw.subtype === 'error' || raw.subtype.startsWith('error_')));
+  }
+
+  private static errorMessage(raw: Record<string, unknown>): string {
+    if (typeof raw.error === 'string') return raw.error;
+    return typeof raw.result === 'string' ? raw.result : 'Amp execute failed';
+  }
+
   private static toDisplayEvents(raw: Record<string, unknown>): AgentDisplayEvent[] {
-    if (raw.type === 'result' && raw.is_error === true) {
-      return [{ type: 'error', message: typeof raw.result === 'string' ? raw.result : 'Amp execute failed' }];
+    if (AmpcodeAgentPlugin.isErrorResult(raw)) {
+      return [{ type: 'error', message: AmpcodeAgentPlugin.errorMessage(raw) }];
     }
     const events: AgentDisplayEvent[] = [];
     if (raw.type === 'assistant') {

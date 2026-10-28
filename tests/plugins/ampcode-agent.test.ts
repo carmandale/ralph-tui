@@ -3,7 +3,8 @@
  * Uses deterministic local executables without requiring Amp accounts or model calls.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import * as childProcess from 'node:child_process';
 import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -217,6 +218,26 @@ describe('Amp completion and streamed callbacks', () => {
     expect(result.stdout).not.toContain(complete);
   });
 
+  test('joins adjacent text blocks within an official-format assistant message', async () => {
+    const record = { type: 'assistant', session_id: 'T-test', parent_tool_use_id: null,
+      message: { type: 'message', role: 'assistant', content: [text('<promise>COM'), text('PLETE</promise>')], stop_reason: 'end_turn' } };
+    expect((await output(jsonl(record))).stdout).toBe(complete);
+  });
+
+  test.each([
+    { type: 'thinking', thinking: 'hidden' }, { type: 'redacted_thinking', data: 'hidden' },
+    { type: 'tool_use', id: 'tool-1', name: 'Read', input: {} },
+    null, 'invalid', [], { type: 'text', text: 12 },
+  ].map((boundary) => [boundary]))('preserves non-text and malformed content boundaries: %j', async (boundary) => {
+    const result = await output(jsonl(assistant([text('<promise>COM'), boundary, text('PLETE</promise>')])));
+    expect(result.stdout).not.toContain(complete);
+  });
+
+  test('whole assistant messages are not treated as deltas across records', async () => {
+    const result = await output(jsonl(assistant([text('<promise>COM')]), assistant([text('PLETE</promise>')])));
+    expect(result.stdout).not.toContain(complete);
+  });
+
   test('flushes a split final line to raw callbacks, display segments and onEnd exactly once', async () => {
     const records = [assistant([{ type: 'tool_use', id: 't1', name: 'Task', input: { prompt: 'inspect', description: 'Inspect' } }]),
       assistant([text('finished ' + complete)]), success('all done')];
@@ -276,11 +297,59 @@ describe('Amp completion and streamed callbacks', () => {
     expect(result.stdout).not.toContain(complete);
   });
 
-  test('normalization runs even when the final display callback throws', async () => {
+  test.each(['stdout', 'segments', 'jsonl'])('final %s callback exceptions still call onEnd once with normalized output', async (callback) => {
+    const ended: AgentExecutionResult[] = [];
+    const fail = () => { throw new Error('consumer'); };
     const result = await output(jsonl(assistant([{ type: 'tool_use', name: 'Bash', input: { command: complete } }])), {
-      onStdout: () => { throw new Error('display failed'); },
+      onStdout: callback === 'stdout' ? fail : undefined,
+      onStdoutSegments: callback === 'segments' ? fail : undefined,
+      onJsonlMessage: callback === 'jsonl' ? fail : undefined,
+      onEnd: (value) => ended.push(value),
     });
     expect(result.stdout).not.toContain(complete);
+    expect(ended).toEqual([result]);
+  });
+
+  test.each(['error_during_execution', 'error_max_turns', 'error'])('explicit %s results cannot complete, even without is_error', async (subtype) => {
+    const display: string[] = [];
+    const result = await output(jsonl(assistant([text(complete)]), {
+      type: 'result', subtype, error: 'execution failed',
+    }), { onStdout: (chunk) => display.push(chunk) });
+    expect(result.status).toBe('failed');
+    expect(result.error).toBe('execution failed');
+    expect(result.stdout).toBe('');
+    expect(display.join('')).toContain('execution failed');
+  });
+
+  test('official error shape preserves its error diagnostic', async () => {
+    const result = await output(jsonl({ type: 'result', subtype: 'error_during_execution', is_error: true,
+      error: 'API request failed', duration_ms: 1, num_turns: 1, session_id: 'T-test' }));
+    expect(result.status).toBe('failed');
+    expect(result.error).toBe('API request failed');
+  });
+
+  test.each([
+    ['win32', 'Amp install.cmd', true], ['win32', 'Amp install.exe', false],
+    ['win32', 'Amp install.com', false], ['linux', 'Amp install.cmd', false],
+  ] as const)('version probing on %s handles %s with shell=%s', async (platform, name, shell) => {
+    const path = join(dir, name);
+    await writeFile(path, '');
+    const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    const probe = spyOn(childProcess, 'execFile').mockImplementation((...args: unknown[]) => {
+      const callback = args.at(-1) as (error: Error | null, stdout: string, stderr: string) => void;
+      callback(null, 'amp 1.2.3', '');
+      return {} as ReturnType<typeof childProcess.execFile>;
+    });
+    try {
+      Object.defineProperty(process, 'platform', { value: platform });
+      const plugin = await fake('', { command: path });
+      expect(await plugin.detect()).toMatchObject({ available: true, version: '1.2.3', executablePath: path });
+      expect(probe).toHaveBeenCalledWith(shell ? `"${path}"` : path, ['--version'],
+        { shell, timeout: 5000, killSignal: 'SIGKILL' }, expect.any(Function));
+    } finally {
+      probe.mockRestore();
+      if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform);
+    }
   });
 });
 
