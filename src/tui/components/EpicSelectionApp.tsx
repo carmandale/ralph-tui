@@ -17,7 +17,7 @@ export interface EpicSelectionAppProps {
   /** Tracker plugin instance */
   tracker: TrackerPlugin;
   /** Callback when user selects an epic and wants to start a run */
-  onEpicSelected: (epic: TrackerTask) => void;
+  onEpicSelected: (epics: TrackerTask[]) => void;
   /** Callback when user quits without selecting */
   onQuit: () => void;
 }
@@ -33,8 +33,18 @@ export function EpicSelectionApp({
 }: EpicSelectionAppProps): ReactNode {
   const [epics, setEpics] = useState<TrackerTask[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [selectedEpicIds, setSelectedEpicIds] = useState<Set<string>>(() => new Set());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | undefined>();
+
+  // Extract configured labels from tracker if available (for empty state guidance)
+  const configuredLabels = (() => {
+    const trackerWithLabels = tracker as { getConfiguredLabels?: () => string[] };
+    if (typeof trackerWithLabels.getConfiguredLabels === 'function') {
+      return trackerWithLabels.getConfiguredLabels();
+    }
+    return [];
+  })();
 
   // Load epics on mount
   useEffect(() => {
@@ -56,8 +66,10 @@ export function EpicSelectionApp({
 
   // Handle keyboard navigation
   const handleKeyboard = useCallback(
-    (key: { name: string }) => {
-      switch (key.name) {
+    (key: { name: string; sequence?: string }) => {
+      const keyName = key.sequence === ' ' ? 'space' : key.name;
+
+      switch (keyName) {
         case 'q':
         case 'escape':
           onQuit();
@@ -73,17 +85,40 @@ export function EpicSelectionApp({
           setSelectedIndex((prev) => Math.min(epics.length - 1, prev + 1));
           break;
 
+        case 'space':
+          if (epics.length > 0 && epics[selectedIndex]) {
+            const epic = epics[selectedIndex];
+            setSelectedEpicIds((prev) => {
+              const next = new Set(prev);
+              if (next.has(epic.id)) {
+                next.delete(epic.id);
+              } else {
+                next.add(epic.id);
+              }
+              return next;
+            });
+          }
+          break;
+
+        case 'a':
+          setSelectedEpicIds((prev) =>
+            prev.size === epics.length
+              ? new Set()
+              : new Set(epics.map((epic) => epic.id))
+          );
+          break;
+
         case 'return':
         case 'enter':
         case 'r':
-          // Start run on selected epic
           if (epics.length > 0 && epics[selectedIndex]) {
-            onEpicSelected(epics[selectedIndex]);
+            const selected = epics.filter((epic) => selectedEpicIds.has(epic.id));
+            onEpicSelected(selected.length > 0 ? selected : [epics[selectedIndex]]);
           }
           break;
       }
     },
-    [epics, selectedIndex, onEpicSelected, onQuit]
+    [epics, selectedIndex, selectedEpicIds, onEpicSelected, onQuit]
   );
 
   useKeyboard(handleKeyboard);
@@ -92,9 +127,11 @@ export function EpicSelectionApp({
     <EpicSelectionView
       epics={epics}
       selectedIndex={selectedIndex}
+      selectedEpicIds={selectedEpicIds}
       trackerName={tracker.meta.name}
       loading={loading}
       error={error}
+      configuredLabels={configuredLabels}
     />
   );
 }

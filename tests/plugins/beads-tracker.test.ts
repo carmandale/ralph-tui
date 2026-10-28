@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
-import { BeadsTrackerPlugin } from '../../src/plugins/trackers/builtin/beads.js';
+import { BeadsTrackerPlugin } from '../../src/plugins/trackers/builtin/beads/index.js';
 
 // Since BeadsTrackerPlugin relies on external CLI, we'll test the
 // plugin methods that don't require actual CLI execution and
@@ -99,7 +99,8 @@ describe('BeadsTrackerPlugin', () => {
 
       expect(labelsQuestion).toBeDefined();
       expect(labelsQuestion?.type).toBe('text');
-      expect(labelsQuestion?.default).toBe('ralph');
+      // Default is empty so users see all epics by default
+      expect(labelsQuestion?.default).toBe('');
     });
   });
 

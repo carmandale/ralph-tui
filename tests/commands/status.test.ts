@@ -32,12 +32,79 @@ const mockCheckLock = mock(() => Promise.resolve({
   lock: null,
 }));
 
+// Import real exports from the session module to re-export in mock
+// This prevents mock pollution affecting other tests
+import {
+  checkSession,
+  acquireLockExclusiveResult,
+  acquireLock,
+  releaseLock,
+  cleanStaleLock,
+  createSession,
+  saveSession,
+  updateSessionStatus,
+  updateSessionIteration,
+  updateSessionMaxIterations,
+  endSession,
+  resumeSession,
+  savePersistedSession,
+  deletePersistedSession,
+  createPersistedSession,
+  updateSessionAfterIteration,
+  pauseSession,
+  resumePersistedSession,
+  completeSession,
+  failSession,
+  addSkippedTask,
+  addActiveTask,
+  removeActiveTask,
+  clearActiveTasks,
+  getActiveTasks,
+  setSubagentPanelVisible,
+  detectAndRecoverStaleSession,
+  acquireLockWithPrompt,
+  releaseLock as releaseLockNew,
+  registerLockCleanupHandlers,
+} from '../../src/session/index.js';
+
 mock.module('../../src/session/index.js', () => ({
+  // Mocked functions for testing
   hasPersistedSession: mockHasPersistedSession,
   loadPersistedSession: mockLoadPersistedSession,
   getSessionSummary: mockGetSessionSummary,
   isSessionResumable: mockIsSessionResumable,
   checkLock: mockCheckLock,
+  // Re-export real functions to prevent pollution
+  checkSession,
+  acquireLockExclusiveResult,
+  acquireLock,
+  releaseLock,
+  cleanStaleLock,
+  createSession,
+  saveSession,
+  updateSessionStatus,
+  updateSessionIteration,
+  updateSessionMaxIterations,
+  endSession,
+  resumeSession,
+  savePersistedSession,
+  deletePersistedSession,
+  createPersistedSession,
+  updateSessionAfterIteration,
+  pauseSession,
+  resumePersistedSession,
+  completeSession,
+  failSession,
+  addSkippedTask,
+  addActiveTask,
+  removeActiveTask,
+  clearActiveTasks,
+  getActiveTasks,
+  setSubagentPanelVisible,
+  detectAndRecoverStaleSession,
+  acquireLockWithPrompt,
+  releaseLockNew,
+  registerLockCleanupHandlers,
 }));
 
 describe('status command', () => {
@@ -463,6 +530,25 @@ describe('status command', () => {
       printStatusHelp();
       const output = consoleOutput.join('\n');
       expect(output).toContain('CI/Script Usage:');
+    });
+  });
+
+  describe('progress bar rendering', () => {
+    test('clamps invalid percent values to avoid RangeError', () => {
+      const { __test__ } = require('../../src/commands/status.js');
+      const { createProgressBar } = __test__ as { createProgressBar: (percent: number, width: number) => string };
+
+      expect(createProgressBar(-10, 10)).toBe('[░░░░░░░░░░]');
+      expect(createProgressBar(150, 10)).toBe('[██████████]');
+      expect(createProgressBar(Number.NaN, 10)).toBe('[░░░░░░░░░░]');
+    });
+
+    test('handles non-finite width safely', () => {
+      const { __test__ } = require('../../src/commands/status.js');
+      const { createProgressBar } = __test__ as { createProgressBar: (percent: number, width: number) => string };
+
+      expect(createProgressBar(50, Number.NaN)).toBe('[]');
+      expect(createProgressBar(50, Number.POSITIVE_INFINITY)).toBe('[]');
     });
   });
 

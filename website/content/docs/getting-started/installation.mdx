@@ -164,6 +164,66 @@ ralph-tui plugins trackers
 ralph-tui config show
 ```
 
+## Managing Skills
+
+Ralph TUI includes bundled skills for PRD creation and task conversion. Skills are installed automatically to **all detected agents** during setup and upgrades.
+
+### Supported Agents
+
+**Global (personal)** - Available across all projects:
+
+| Agent | Skills Location |
+|-------|-----------------|
+| Claude Code | `~/.claude/skills/` |
+| OpenCode | `~/.config/opencode/skills/` |
+| Kiro CLI | `~/.kiro/skills/` |
+| Factory Droid | `~/.factory/skills/` |
+
+**Local (project)** - Takes precedence, version-controllable:
+
+| Agent | Skills Location |
+|-------|-----------------|
+| Claude Code | `.claude/skills/` |
+| OpenCode | `.opencode/skills/` |
+| Kiro CLI | `.kiro/skills/` |
+| Factory Droid | `.factory/skills/` |
+
+<Callout type="tip">
+Local skills take precedence over global skills, allowing project-specific customizations that can be version-controlled with your project.
+</Callout>
+
+### Manual Management
+
+```bash
+# List bundled skills and installation status per agent
+ralph-tui skills list
+
+# Install skills to global directory (default)
+ralph-tui skills install
+
+# Install skills to local project directory
+ralph-tui skills install --local
+
+# Copy files instead of symlinking (useful if symlink install fails)
+ralph-tui skills install --copy
+
+# Force reinstall (overwrite existing)
+ralph-tui skills install --force
+
+# Install to a specific agent only
+ralph-tui skills install --agent claude
+ralph-tui skills install --agent opencode
+ralph-tui skills install --agent kiro
+ralph-tui skills install --agent droid
+
+# Install a specific skill
+ralph-tui skills install ralph-tui-prd
+```
+
+<Callout type="tip">
+Skills are installed automatically when you upgrade ralph-tui. The migration runs on first use after upgrade and installs skills to all your detected agents.
+</Callout>
+
 ## Troubleshooting
 
 ### "Agent not found"

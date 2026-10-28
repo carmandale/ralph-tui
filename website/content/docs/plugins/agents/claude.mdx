@@ -93,6 +93,15 @@ printMode = "text"
 | `timeout` | number | `0` | Execution timeout in ms (0 = no timeout) |
 | `command` | string | `"claude"` | Path to Claude CLI executable |
 
+<Callout type="tip">
+For simple configs, you can use the top-level `command` option instead of the `[[agents]]` array:
+```toml
+agent = "claude"
+command = "ccr code"  # Use Claude Code Router
+```
+See [Custom Command](/docs/configuration/options#custom-command) for details.
+</Callout>
+
 ## Models
 
 Claude Code supports three model variants:
@@ -139,9 +148,8 @@ subagentTracingDetail = "full"
 ```
 
 Or toggle in TUI:
-- Press `t` to cycle through levels
-- Press `T` (Shift+T) to toggle the subagent tree panel
-- Press `u` to toggle the subagent tracing panel
+- Press `t` to cycle through detail levels (minimal → moderate → full)
+- Press `T` (Shift+T) to toggle the subagent tree panel visibility
 
 <Callout type="info">
 Subagent tracing requires Claude's streaming JSON output. Ralph TUI automatically adds the necessary flags (`--verbose --output-format stream-json`) when tracing is enabled.
@@ -244,7 +252,7 @@ When finished (or if already complete), signal completion with:
 ### "Subagent tracing not showing"
 
 1. Ensure `subagentTracingDetail` is not `"off"`
-2. Press `u` to toggle the tracing panel visibility
+2. Press `T` (Shift+T) to toggle the subagent tree panel visibility
 3. Check that Claude is outputting JSONL (run manually with `--verbose --output-format stream-json`)
 
 ## Next Steps

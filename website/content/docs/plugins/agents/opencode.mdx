@@ -43,6 +43,14 @@ opencode --version
     ralph-tui run --prd ./prd.json --agent opencode --model anthropic/claude-3-5-sonnet
     ```
   </Step>
+
+  <Step title="Select a Variant">
+    Control reasoning effort with `--variant`:
+
+    ```bash
+    ralph-tui run --prd ./prd.json --agent opencode --model google/gemini-2.5-pro --variant high
+    ```
+  </Step>
 </Steps>
 
 ## Configuration
@@ -58,6 +66,7 @@ agent = "opencode"
 [agentOptions]
 provider = "anthropic"
 model = "claude-3-5-sonnet"
+variant = "high"
 ```
 
 ### Full Config
@@ -74,6 +83,7 @@ timeout = 300000
 [agents.options]
 provider = "anthropic"
 model = "claude-3-5-sonnet"
+variant = "high"
 agent = "general"
 format = "default"
 ```
@@ -84,10 +94,20 @@ format = "default"
 |--------|------|---------|-------------|
 | `provider` | string | - | AI provider: `anthropic`, `openai`, `google`, `xai`, `ollama` |
 | `model` | string | - | Model name within the provider |
+| `variant` | string | - | Model reasoning effort (model-specific, e.g., `minimal`, `high`, `max` for Gemini) |
 | `agent` | string | `"general"` | Agent type: `general`, `build`, or `plan` |
 | `format` | string | `"default"` | Output format: `default` or `json` |
 | `timeout` | number | `0` | Execution timeout in ms (0 = no timeout) |
 | `command` | string | `"opencode"` | Path to OpenCode CLI executable |
+
+<Callout type="tip">
+For simple configs, you can use the top-level `command` option instead of the `[[agents]]` array:
+```toml
+agent = "opencode"
+command = "/custom/path/opencode"
+```
+See [Custom Command](/docs/configuration/options#custom-command) for details.
+</Callout>
 
 ## Providers and Models
 
@@ -129,6 +149,18 @@ OpenCode supports multiple AI providers. Models are specified in `provider/model
 
 <Callout type="info">
 Model names are validated by the provider's API. Invalid model names result in errors from OpenCode, not Ralph TUI.
+</Callout>
+
+## Model Variants
+
+You can control the reasoning effort for supported models using the `variant` option:
+
+```bash
+ralph-tui run --agent opencode --model google/gemini-2.5-pro --variant max
+```
+
+<Callout type="info">
+Variant values are model-specific and validated by the provider's API. Check your model's documentation for supported variants.
 </Callout>
 
 ## Agent Types
@@ -197,13 +229,19 @@ OpenCode emits metadata lines during execution (tool calls, progress indicators)
 
 The filtered output shows only the agent's actual responses.
 
-## No Subagent Tracing
+## Subagent Tracing
 
-<Callout type="warning">
-Unlike Claude Code, OpenCode does not support subagent tracing. The tracing panel will be empty when using OpenCode.
+<Callout type="tip">
+OpenCode supports subagent tracing! Ralph TUI automatically detects and displays Task tool invocations in the subagent tree panel.
 </Callout>
 
-If you need visibility into tool calls, consider using Claude Code instead or reviewing OpenCode's native output.
+When OpenCode spawns subagents (using the Task tool), Ralph TUI:
+
+1. **Detects subagent spawns**: Parses OpenCode's JSONL output for Task tool invocations
+2. **Shows hierarchy**: Displays subagents in the tree panel (toggle with `T`)
+3. **Captures results**: Shows each subagent's prompt and result when selected
+
+This works with any provider (Anthropic, OpenAI, Google, etc.) as long as the underlying model supports tool use.
 
 ## Rate Limit Handling
 
@@ -311,6 +349,6 @@ If you see warnings about agent types, either:
 
 ## Next Steps
 
-- **[Claude Code Agent](/docs/plugins/agents/claude)** - Anthropic-specific with subagent tracing
+- **[Claude Code Agent](/docs/plugins/agents/claude)** - Anthropic-specific CLI integration
 - **[Configuration](/docs/configuration/options)** - Full options reference
 - **[Prompt Templates](/docs/templates)** - Customize task prompts

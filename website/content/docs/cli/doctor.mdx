@@ -1,0 +1,152 @@
+---
+title: doctor
+description: Diagnose agent configuration issues before starting work.
+---
+
+## Synopsis
+
+```bash
+ralph-tui doctor [options]
+```
+
+The `doctor` command runs diagnostics on your configured AI agent to verify it's fully operational before you start working. This helps identify common configuration issues.
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `--agent <name>` | Check specific agent (default: configured agent) |
+| `--json` | Output in JSON format |
+| `--cwd <path>` | Working directory (default: current directory) |
+| `-h`, `--help` | Show help message |
+
+## Diagnostic Checks
+
+The doctor command runs two checks:
+
+### 1. Detection
+
+Verifies the agent CLI is installed and accessible:
+
+- Checks if the CLI executable exists
+- Verifies it's in PATH or configured location
+- Reports the detected version
+
+### 2. Preflight
+
+Sends a test prompt to verify the agent can respond:
+
+- Confirms API keys are configured
+- Verifies network connectivity
+- Tests actual agent responsiveness
+
+The preflight check defaults to a **30 second timeout**. If you're using a local reasoning model or a slow wrapper that can legitimately take longer to produce its first response, raise the limit with [`preflightTimeoutMs`](/docs/configuration/options#preflight-timeout):
+
+```toml
+# .ralph-tui/config.toml
+preflightTimeoutMs = 120000  # 2 minutes
+```
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Check configured agent
+ralph-tui doctor
+
+# Check a specific agent
+ralph-tui doctor --agent claude
+ralph-tui doctor --agent opencode
+```
+
+### Output Formats
+
+```bash
+# Human-readable output (default)
+ralph-tui doctor
+
+# JSON output for scripts and CI
+ralph-tui doctor --json
+```
+
+### Sample Output
+
+```
+🔍 Checking Claude Code...
+
+  Step 1: Detection (checking if CLI is available)...
+    ✓ Found at: /usr/local/bin/claude
+    ✓ Version: 1.0.28
+
+  Step 2: Preflight (testing if agent can respond)...
+    Running test prompt...
+    ✓ Agent responded successfully (2451ms)
+
+═══════════════════════════════════════════════════════════════
+                    Ralph TUI Doctor Report
+═══════════════════════════════════════════════════════════════
+
+  Status:    ✓ HEALTHY
+  Agent:     Claude Code (claude)
+
+  Detection:
+    ✓ CLI available
+    ✓ Path: /usr/local/bin/claude
+    ✓ Version: 1.0.28
+
+  Preflight:
+    ✓ Agent responded to test prompt
+    ✓ Response time: 2451ms
+
+───────────────────────────────────────────────────────────────
+  ✓ Your agent is configured correctly and ready to use.
+
+  Start working: ralph-tui run
+───────────────────────────────────────────────────────────────
+```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | Agent is healthy and ready to use |
+| `1` | Agent has configuration issues |
+
+## Common Issues
+
+### OpenCode
+
+```
+✗ Agent failed preflight check
+  Error: No default model configured
+
+Suggestions:
+  Configure a default model in ~/.config/opencode/opencode.json
+```
+
+**Solution:** Set a default model in your OpenCode configuration.
+
+### Claude Code
+
+```
+✗ Agent failed preflight check
+  Error: ANTHROPIC_API_KEY not set
+```
+
+**Solution:** Set the `ANTHROPIC_API_KEY` environment variable.
+
+### Factory Droid
+
+```
+✗ CLI not available
+  Error: droid command not found
+```
+
+**Solution:** Install Factory Droid and ensure it's in your PATH.
+
+## Related Commands
+
+- [`run`](/docs/cli/run) - Start execution after doctor passes
+- [`info`](/docs/cli/info) - Display system information for bug reports
+- [`setup`](/docs/cli/setup) - Configure your project

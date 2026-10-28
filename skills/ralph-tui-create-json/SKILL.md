@@ -9,6 +9,8 @@ Converts PRDs to prd.json format for ralph-tui autonomous execution.
 
 > **Note:** This skill is bundled with ralph-tui's JSON tracker plugin. Future tracker plugins (Linear, GitHub Issues, etc.) will bundle their own task creation skills.
 
+> **⚠️ CRITICAL:** The output MUST be a FLAT JSON object with "name" and "userStories" at the ROOT level. DO NOT wrap content in a "prd" object or use "tasks" array. See "Schema Anti-Patterns" section below.
+
 ---
 
 ## The Job
@@ -47,9 +49,11 @@ Extract:
 
 ## Output Format
 
+The JSON file MUST be a FLAT object at the root level:
+
 ```json
 {
-  "project": "[Project name from PRD or directory]",
+  "name": "[Project name from PRD or directory]",
   "branchName": "ralph/[feature-name-kebab-case]",
   "description": "[Feature description from PRD]",
   "userStories": [
@@ -83,6 +87,76 @@ Extract:
       "notes": "",
       "dependsOn": ["US-001"]
     }
+  ]
+}
+```
+
+---
+
+## CRITICAL: Schema Anti-Patterns (DO NOT USE)
+
+The following patterns are INVALID and will cause validation errors:
+
+### ❌ WRONG: Wrapper object
+
+```json
+{
+  "prd": {
+    "name": "...",
+    "userStories": [...]
+  }
+}
+```
+
+This wraps everything in a "prd" object. **DO NOT DO THIS.** The "name" and "userStories" fields must be at the ROOT level.
+
+### ❌ WRONG: Using "tasks" instead of "userStories"
+
+```json
+{
+  "name": "...",
+  "tasks": [...]
+}
+```
+
+The array is called **"userStories"**, not "tasks".
+
+### ❌ WRONG: Complex nested structures
+
+```json
+{
+  "metadata": {...},
+  "overview": {...},
+  "migration_strategy": {
+    "phases": [...]
+  }
+}
+```
+
+Even if the PRD describes phases/milestones/sprints, you MUST flatten these into a single "userStories" array.
+
+### ❌ WRONG: Using "status" instead of "passes"
+
+```json
+{
+  "userStories": [{
+    "id": "US-001",
+    "status": "open"  // WRONG!
+  }]
+}
+```
+
+Use `"passes": false` for incomplete stories, `"passes": true` for completed.
+
+### ✅ CORRECT: Flat structure at root
+
+```json
+{
+  "name": "Android Kotlin Migration",
+  "branchName": "ralph/kotlin-migration",
+  "userStories": [
+    {"id": "US-001", "title": "Create Scraper interface", "passes": false, "dependsOn": []},
+    {"id": "US-002", "title": "Implement WeebCentralScraper", "passes": false, "dependsOn": ["US-001"]}
   ]
 }
 ```
@@ -226,7 +300,7 @@ For UI stories, also include:
 **Output prd.json:**
 ```json
 {
-  "project": "my-app",
+  "name": "Task Priority System",
   "branchName": "ralph/task-priority",
   "description": "Add priority levels to tasks",
   "userStories": [

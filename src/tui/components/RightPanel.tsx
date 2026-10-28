@@ -8,11 +8,9 @@
 import type { ReactNode } from 'react';
 import { useMemo, useState, useEffect } from 'react';
 import { colors, getTaskStatusColor, getTaskStatusIndicator } from '../theme.js';
-import type { RightPanelProps, DetailsViewMode, IterationTimingInfo, SubagentTreeNode, TaskPriority } from '../types.js';
-import type { SubagentDetailLevel } from '../../config/types.js';
+import type { RightPanelProps, DetailsViewMode, IterationTimingInfo, TaskPriority } from '../types.js';
 import { stripAnsiCodes, type FormattedSegment } from '../../plugins/agents/output-formatting.js';
 import { formatElapsedTime } from '../theme.js';
-import { SubagentSections } from './SubagentSection.js';
 import { parseAgentOutput } from '../output-parser.js';
 
 /**
@@ -140,9 +138,88 @@ function formatTimestamp(isoString: string): string {
 
 /**
  * Display when no task is selected.
- * Shows helpful setup instructions for new users.
+ * Shows connection status for remote instances, or setup instructions for local.
  */
-function NoSelection(): ReactNode {
+function NoSelection({
+  isViewingRemote = false,
+  remoteConnectionStatus,
+  remoteAlias,
+}: {
+  isViewingRemote?: boolean;
+  remoteConnectionStatus?: 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
+  remoteAlias?: string;
+}): ReactNode {
+  // Show connection-specific help for remote instances
+  if (isViewingRemote && remoteConnectionStatus !== 'connected') {
+    return (
+      <box
+        style={{
+          flexGrow: 1,
+          flexDirection: 'column',
+          padding: 2,
+        }}
+      >
+        <box style={{ marginBottom: 1 }}>
+          <text fg={colors.status.warning}>
+            {remoteConnectionStatus === 'connecting' && '◐ Connecting...'}
+            {remoteConnectionStatus === 'reconnecting' && '⟳ Reconnecting...'}
+            {remoteConnectionStatus === 'disconnected' && '○ Not Connected'}
+          </text>
+        </box>
+
+        {remoteConnectionStatus === 'disconnected' && (
+          <>
+            <box style={{ marginBottom: 2 }}>
+              <text fg={colors.fg.secondary}>
+                Remote "{remoteAlias}" is not connected.
+              </text>
+            </box>
+            <box style={{ flexDirection: 'column', gap: 1 }}>
+              <text fg={colors.fg.muted}>Possible causes:</text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Remote server is not running
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Network connectivity issues
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Incorrect host/port configuration
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Authentication token mismatch
+              </text>
+            </box>
+            <box style={{ marginTop: 2, flexDirection: 'column', gap: 1 }}>
+              <text fg={colors.fg.muted}>Try:</text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Press{' '}
+                <span fg={colors.fg.secondary}>[</span> or{' '}
+                <span fg={colors.fg.secondary}>]</span> to switch tabs
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Press{' '}
+                <span fg={colors.fg.secondary}>e</span> to edit remote config
+              </text>
+              <text fg={colors.fg.muted}>
+                <span fg={colors.accent.primary}>•</span> Press{' '}
+                <span fg={colors.fg.secondary}>x</span> to delete this remote
+              </text>
+            </box>
+          </>
+        )}
+
+        {(remoteConnectionStatus === 'connecting' || remoteConnectionStatus === 'reconnecting') && (
+          <box style={{ marginTop: 1 }}>
+            <text fg={colors.fg.muted}>
+              Attempting to connect to {remoteAlias}...
+            </text>
+          </box>
+        )}
+      </box>
+    );
+  }
+
+  // Default: show setup instructions for local instance
   return (
     <box
       style={{
@@ -425,12 +502,23 @@ function TaskMetadataView({
   );
 }
 
+function formatTokenNumber(tokens: number): string {
+  return tokens.toLocaleString();
+}
+
 /**
- * Timing summary component for the output view
- * Shows started time immediately, duration that updates every second while running,
- * and ended time when complete. Also displays model info when available.
+ * Timing and usage summary component for the output view.
+ * Shows started/ended/duration, and usage/context details in the same panel.
  */
-function TimingSummary({ timing }: { timing?: IterationTimingInfo }): ReactNode {
+function TimingSummary({
+  timing,
+  usage,
+  isRunning,
+}: {
+  timing?: IterationTimingInfo;
+  usage?: RightPanelProps['taskUsage'];
+  isRunning: boolean;
+}): ReactNode {
   // Track elapsed time for running iterations
   const [elapsedMs, setElapsedMs] = useState<number>(0);
 
@@ -479,6 +567,24 @@ function TimingSummary({ timing }: { timing?: IterationTimingInfo }): ReactNode 
       })()
     : null;
 
+  const hasUsageTelemetry =
+    usage !== undefined &&
+    (
+      usage.events > 0 ||
+      (usage.inputTokens ?? 0) > 0 ||
+      (usage.outputTokens ?? 0) > 0 ||
+      (usage.totalTokens ?? 0) > 0 ||
+      usage.remainingContextTokens !== undefined ||
+      usage.contextWindowTokens !== undefined ||
+      usage.remainingContextPercent !== undefined
+    );
+  const inputTokens = usage?.inputTokens ?? 0;
+  const outputTokens = usage?.outputTokens ?? 0;
+  const totalTokens = (usage?.totalTokens ?? 0) > 0 ? (usage?.totalTokens ?? 0) : inputTokens + outputTokens;
+  const remainingTokens = hasUsageTelemetry ? usage?.remainingContextTokens : undefined;
+  const contextWindow = hasUsageTelemetry ? usage?.contextWindowTokens : undefined;
+  const remainingPercent = hasUsageTelemetry ? usage?.remainingContextPercent : undefined;
+
   return (
     <box
       style={{
@@ -487,6 +593,7 @@ function TimingSummary({ timing }: { timing?: IterationTimingInfo }): ReactNode 
         border: true,
         borderColor: colors.border.muted,
         backgroundColor: colors.bg.tertiary,
+        flexDirection: 'column',
       }}
     >
       {/* Model info row - show when model is available */}
@@ -496,26 +603,183 @@ function TimingSummary({ timing }: { timing?: IterationTimingInfo }): ReactNode 
           <text fg={colors.accent.primary}>{modelDisplay.display}</text>
         </box>
       )}
-      {/* Timing info row */}
-      <box style={{ flexDirection: 'row', gap: 3 }}>
-        <text fg={colors.fg.muted}>
-          Started:{' '}
-          <span fg={colors.fg.secondary}>
-            {timing.startedAt ? formatTimestamp(timing.startedAt) : '—'}
-          </span>
+      {/* Timing + usage row */}
+      <box
+        style={{
+          flexDirection: 'row',
+          justifyContent: 'space-between',
+          marginBottom: isRunning ? 1 : 0,
+        }}
+      >
+        <box style={{ flexDirection: 'row', gap: 3 }}>
+          <text fg={colors.fg.muted}>
+            Started:{' '}
+            <span fg={colors.fg.secondary}>
+              {timing.startedAt ? formatTimestamp(timing.startedAt) : '—'}
+            </span>
+          </text>
+          <text fg={colors.fg.muted}>
+            Ended:{' '}
+            <span fg={colors.fg.secondary}>
+              {timing.endedAt ? formatTimestamp(timing.endedAt) : '—'}
+            </span>
+          </text>
+          <text fg={colors.fg.muted}>
+            Duration:{' '}
+            <span fg={timing.isRunning ? colors.status.info : colors.accent.primary}>
+              {durationDisplay}
+            </span>
+          </text>
+        </box>
+
+        {hasUsageTelemetry ? (
+          <box style={{ flexDirection: 'row', gap: 3 }}>
+            <text fg={colors.fg.muted}>
+              Input: <span fg={colors.fg.secondary}>{formatTokenNumber(inputTokens)}</span>
+            </text>
+            <text fg={colors.fg.muted}>
+              Output: <span fg={colors.fg.secondary}>{formatTokenNumber(outputTokens)}</span>
+            </text>
+            <text fg={colors.fg.muted}>
+              Total: <span fg={colors.accent.primary}>{formatTokenNumber(totalTokens)}</span>
+            </text>
+          </box>
+        ) : (
+          <text fg={colors.fg.muted}>
+            {isRunning ? 'Usage: waiting for live telemetry...' : 'Usage: unavailable'}
+          </text>
+        )}
+      </box>
+
+      {isRunning && (
+        <box style={{ flexDirection: 'row', marginBottom: 1 }}>
+          <text fg={colors.fg.muted}>Context: </text>
+          {!hasUsageTelemetry ? (
+            <text fg={colors.fg.muted}>waiting for live telemetry...</text>
+          ) : remainingPercent !== undefined ? (
+            <text fg={colors.accent.primary}>
+              {remainingPercent.toFixed(1)}% remaining
+            </text>
+          ) : (
+            <text fg={colors.fg.secondary}>window size unknown</text>
+          )}
+          {hasUsageTelemetry && remainingTokens !== undefined && contextWindow !== undefined && (
+            <text fg={colors.fg.secondary}>
+              {' '}
+              ({formatTokenNumber(remainingTokens)} / {formatTokenNumber(contextWindow)} tokens)
+            </text>
+          )}
+        </box>
+      )}
+
+    </box>
+  );
+}
+
+/**
+ * Prompt preview view - shows the full rendered prompt that will be sent to the agent.
+ * Displays the template source indicator and scrollable prompt content.
+ *
+ * Note: This shows a "point-in-time" preview - dynamic content like progress.md
+ * may change before the actual prompt is sent during execution.
+ */
+function PromptPreviewView({
+  task,
+  promptPreview,
+  templateSource,
+}: {
+  task: NonNullable<RightPanelProps['selectedTask']>;
+  promptPreview?: string;
+  templateSource?: string;
+}): ReactNode {
+  const statusColor = getTaskStatusColor(task.status);
+  const statusIndicator = getTaskStatusIndicator(task.status);
+
+  return (
+    <box style={{ flexDirection: 'column', padding: 1, flexGrow: 1 }}>
+      {/* Compact task header with template source */}
+      <box style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 1 }}>
+        <box>
+          <text>
+            <span fg={statusColor}>{statusIndicator}</span>
+            <span fg={colors.fg.primary}> {task.title}</span>
+            <span fg={colors.fg.muted}> ({task.id})</span>
+          </text>
+        </box>
+        {templateSource && (
+          <box>
+            <text fg={colors.accent.secondary}>[{templateSource}]</text>
+          </box>
+        )}
+      </box>
+
+      {/* Dynamic content notice */}
+      <box
+        style={{
+          marginBottom: 1,
+          padding: 1,
+          border: true,
+          borderColor: colors.status.warning,
+          backgroundColor: colors.bg.tertiary,
+        }}
+      >
+        <text fg={colors.status.warning}>
+          ⚠ Preview only - dynamic content may change before execution
         </text>
-        <text fg={colors.fg.muted}>
-          Ended:{' '}
-          <span fg={colors.fg.secondary}>
-            {timing.endedAt ? formatTimestamp(timing.endedAt) : '—'}
-          </span>
-        </text>
-        <text fg={colors.fg.muted}>
-          Duration:{' '}
-          <span fg={timing.isRunning ? colors.status.info : colors.accent.primary}>
-            {durationDisplay}
-          </span>
-        </text>
+      </box>
+
+      {/* Full-height prompt preview */}
+      <box
+        title="Prompt Preview"
+        style={{
+          flexGrow: 1,
+          border: true,
+          borderColor: colors.accent.primary,
+          backgroundColor: colors.bg.secondary,
+        }}
+      >
+        <scrollbox style={{ flexGrow: 1, padding: 1 }}>
+          {promptPreview ? (
+            <box style={{ flexDirection: 'column' }}>
+              {promptPreview.split('\n').map((line, i) => {
+                // Highlight markdown headers
+                if (line.match(/^#+\s/)) {
+                  return (
+                    <text key={i} fg={colors.accent.primary}>
+                      {line}
+                    </text>
+                  );
+                }
+                // Highlight bullet points
+                if (line.match(/^\s*[-*]\s/)) {
+                  return (
+                    <text key={i} fg={colors.fg.secondary}>
+                      {line}
+                    </text>
+                  );
+                }
+                // Highlight code fences
+                if (line.match(/^```/)) {
+                  return (
+                    <text key={i} fg={colors.accent.tertiary}>
+                      {line}
+                    </text>
+                  );
+                }
+                // Regular text
+                return (
+                  <text key={i} fg={colors.fg.secondary}>
+                    {line}
+                  </text>
+                );
+              })}
+            </box>
+          ) : (
+            <text fg={colors.fg.muted}>
+              Cycle views with 'o' or press Shift+O for prompt preview
+            </text>
+          )}
+        </scrollbox>
       </box>
     </box>
   );
@@ -531,30 +795,21 @@ function TaskOutputView({
   iterationOutput,
   iterationSegments,
   iterationTiming,
+  taskUsage,
   agentName,
   currentModel,
-  subagentDetailLevel = 'off',
-  subagentTree = [],
-  collapsedSubagents = new Set(),
-  focusedSubagentId,
-  onSubagentToggle,
 }: {
   task: NonNullable<RightPanelProps['selectedTask']>;
   currentIteration: number;
   iterationOutput?: string;
   iterationSegments?: FormattedSegment[];
   iterationTiming?: IterationTimingInfo;
+  taskUsage?: RightPanelProps['taskUsage'];
   agentName?: string;
   currentModel?: string;
-  subagentDetailLevel?: SubagentDetailLevel;
-  subagentTree?: SubagentTreeNode[];
-  collapsedSubagents?: Set<string>;
-  focusedSubagentId?: string;
-  onSubagentToggle?: (id: string) => void;
 }): ReactNode {
   const statusColor = getTaskStatusColor(task.status);
   const statusIndicator = getTaskStatusIndicator(task.status);
-  const hasSubagents = subagentTree.length > 0 && subagentDetailLevel !== 'off';
 
   // Check if we're live streaming
   const isLiveStreaming = iterationTiming?.isRunning === true;
@@ -608,31 +863,12 @@ function TaskOutputView({
         )}
       </box>
 
-      {/* Timing summary - shows start/end/duration */}
-      <TimingSummary timing={iterationTiming} />
-
-      {/* Subagent sections (when tracing is enabled and subagents exist) */}
-      {hasSubagents && (
-        <box
-          title={`Subagents (${subagentTree.length})`}
-          style={{
-            marginBottom: 1,
-            border: true,
-            borderColor: colors.accent.secondary,
-            backgroundColor: colors.bg.tertiary,
-          }}
-        >
-          <scrollbox style={{ maxHeight: 10, padding: 1 }}>
-            <SubagentSections
-              tree={subagentTree}
-              collapsedSet={collapsedSubagents}
-              focusedId={focusedSubagentId}
-              detailLevel={subagentDetailLevel}
-              onToggle={onSubagentToggle}
-            />
-          </scrollbox>
-        </box>
-      )}
+      {/* Timing + usage summary - unified panel */}
+      <TimingSummary
+        timing={iterationTiming}
+        usage={taskUsage}
+        isRunning={isLiveStreaming}
+      />
 
       {/* Full-height iteration output */}
       <box
@@ -650,7 +886,7 @@ function TaskOutputView({
           backgroundColor: colors.bg.secondary,
         }}
       >
-        <scrollbox style={{ flexGrow: 1, padding: 1 }}>
+        <scrollbox style={{ flexGrow: 1, padding: 1 }} stickyScroll={true} stickyStart="bottom">
           {/* Line-based coloring with tool names in green */}
           {displayOutput !== undefined && displayOutput.length > 0 ? (
             <box style={{ flexDirection: 'column' }}>
@@ -687,7 +923,7 @@ function TaskOutputView({
 }
 
 /**
- * Task details view - switches between metadata and output views
+ * Task details view - switches between metadata, output, and prompt views
  */
 function TaskDetails({
   task,
@@ -696,13 +932,11 @@ function TaskDetails({
   iterationSegments,
   viewMode = 'details',
   iterationTiming,
+  taskUsage,
   agentName,
   currentModel,
-  subagentDetailLevel,
-  subagentTree,
-  collapsedSubagents,
-  focusedSubagentId,
-  onSubagentToggle,
+  promptPreview,
+  templateSource,
 }: {
   task: NonNullable<RightPanelProps['selectedTask']>;
   currentIteration: number;
@@ -710,13 +944,11 @@ function TaskDetails({
   iterationSegments?: FormattedSegment[];
   viewMode?: DetailsViewMode;
   iterationTiming?: IterationTimingInfo;
+  taskUsage?: RightPanelProps['taskUsage'];
   agentName?: string;
   currentModel?: string;
-  subagentDetailLevel?: SubagentDetailLevel;
-  subagentTree?: SubagentTreeNode[];
-  collapsedSubagents?: Set<string>;
-  focusedSubagentId?: string;
-  onSubagentToggle?: (id: string) => void;
+  promptPreview?: string;
+  templateSource?: string;
 }): ReactNode {
   if (viewMode === 'output') {
     return (
@@ -726,13 +958,19 @@ function TaskDetails({
         iterationOutput={iterationOutput}
         iterationSegments={iterationSegments}
         iterationTiming={iterationTiming}
+        taskUsage={taskUsage}
         agentName={agentName}
         currentModel={currentModel}
-        subagentDetailLevel={subagentDetailLevel}
-        subagentTree={subagentTree}
-        collapsedSubagents={collapsedSubagents}
-        focusedSubagentId={focusedSubagentId}
-        onSubagentToggle={onSubagentToggle}
+      />
+    );
+  }
+
+  if (viewMode === 'prompt') {
+    return (
+      <PromptPreviewView
+        task={task}
+        promptPreview={promptPreview}
+        templateSource={templateSource}
       />
     );
   }
@@ -741,27 +979,32 @@ function TaskDetails({
 }
 
 /**
- * RightPanel component showing task details or iteration output
+ * RightPanel component showing task details, iteration output, or prompt preview
  */
 export function RightPanel({
   selectedTask,
   currentIteration,
   iterationOutput,
   iterationSegments,
+  taskUsage,
   viewMode = 'details',
   iterationTiming,
   agentName,
   currentModel,
-  subagentDetailLevel = 'off',
-  subagentTree,
-  collapsedSubagents,
-  focusedSubagentId,
-  onSubagentToggle,
+  promptPreview,
+  templateSource,
+  isViewingRemote = false,
+  remoteConnectionStatus,
+  remoteAlias,
 }: RightPanelProps): ReactNode {
-  // Build title with view mode indicator and subagent level
-  const modeIndicator = viewMode === 'details' ? '[Details]' : '[Output]';
-  const subagentIndicator = subagentDetailLevel !== 'off' ? ` [Trace: ${subagentDetailLevel}]` : '';
-  const title = `Details ${modeIndicator}${subagentIndicator}`;
+  // Build title with view mode indicator
+  const modeIndicators: Record<typeof viewMode, string> = {
+    details: '[Details]',
+    output: '[Output]',
+    prompt: '[Prompt]',
+  };
+  const modeIndicator = modeIndicators[viewMode];
+  const title = `Details ${modeIndicator}`;
 
   return (
     <box
@@ -784,16 +1027,18 @@ export function RightPanel({
           iterationSegments={iterationSegments}
           viewMode={viewMode}
           iterationTiming={iterationTiming}
+          taskUsage={taskUsage}
           agentName={agentName}
           currentModel={currentModel}
-          subagentDetailLevel={subagentDetailLevel}
-          subagentTree={subagentTree}
-          collapsedSubagents={collapsedSubagents}
-          focusedSubagentId={focusedSubagentId}
-          onSubagentToggle={onSubagentToggle}
+          promptPreview={promptPreview}
+          templateSource={templateSource}
         />
       ) : (
-        <NoSelection />
+        <NoSelection
+          isViewingRemote={isViewingRemote}
+          remoteConnectionStatus={remoteConnectionStatus}
+          remoteAlias={remoteAlias}
+        />
       )}
     </box>
   );

@@ -6,7 +6,12 @@
  */
 
 import { spawn } from 'node:child_process';
-import { BaseAgentPlugin, findCommandPath } from '../base.js';
+import {
+  BaseAgentPlugin,
+  findCommandPath,
+  quoteForWindowsShell,
+  shouldUseWindowsShell,
+} from '../base.js';
 import { processAgentEvents, processAgentEventsToSegments, type AgentDisplayEvent } from '../output-formatting.js';
 import type {
   AgentPluginMeta,
@@ -17,6 +22,95 @@ import type {
   AgentDetectResult,
   AgentExecutionHandle,
 } from '../types.js';
+
+/**
+ * Callbacks for the JSONL streaming buffer.
+ */
+export interface JsonlBufferCallbacks {
+  /** Called when a JSONL message is parsed (for subagent tracing) */
+  onJsonlMessage?: (message: Record<string, unknown>) => void;
+  /** Called with formatted display events */
+  onDisplayEvents?: (events: AgentDisplayEvent[]) => void;
+}
+
+/**
+ * State object for JSONL streaming buffer.
+ * Accumulates partial data and emits complete lines.
+ */
+export interface JsonlStreamingBuffer {
+  /** Push new data into the buffer, processing any complete lines */
+  push: (data: string) => void;
+  /** Flush any remaining buffered content (call on stream end) */
+  flush: () => void;
+}
+
+/**
+ * Create a streaming buffer for OpenCode JSONL output.
+ * Handles partial chunks and emits complete lines for processing.
+ *
+ * This is exported for testability - the execute() method uses this internally.
+ */
+export function createOpenCodeJsonlBuffer(
+  callbacks: JsonlBufferCallbacks
+): JsonlStreamingBuffer {
+  let buffer = '';
+
+  const processLine = (line: string): void => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+
+    // Parse raw JSONL lines and forward to onJsonlMessage for subagent tracing
+    if (callbacks.onJsonlMessage && trimmed.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        callbacks.onJsonlMessage(parsed);
+      } catch {
+        // Not valid JSON, skip
+      }
+    }
+
+    // Process for display events
+    const events = parseOpenCodeJsonLine(trimmed);
+    if (events.length > 0 && callbacks.onDisplayEvents) {
+      callbacks.onDisplayEvents(events);
+    }
+  };
+
+  return {
+    push: (data: string): void => {
+      buffer += data;
+
+      // If no newline, wait for more data
+      if (!buffer.includes('\n')) return;
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? ''; // Keep the last partial line in buffer
+
+      for (const line of lines) {
+        processLine(line);
+      }
+    },
+
+    flush: (): void => {
+      // Process any remaining content that didn't end with a newline
+      if (buffer.length > 0) {
+        processLine(buffer);
+        buffer = '';
+      }
+    },
+  };
+}
+
+/**
+ * Determine when OpenCode prompts should be sent via stdin instead of argv.
+ * Only Windows shell wrappers need stdin; native executables can accept positional args safely.
+ */
+export function shouldPassOpenCodePromptViaStdin(
+  commandPath: string | undefined,
+  currentPlatform: NodeJS.Platform = process.platform
+): boolean {
+  return shouldUseWindowsShell(commandPath ?? 'opencode', currentPlatform);
+}
 
 /**
  * Parse opencode JSON line into standardized display events.
@@ -46,9 +140,10 @@ function parseOpenCodeJsonLine(jsonLine: string): AgentDisplayEvent[] {
 
       case 'tool_use': {
         // Tool being called - show name and relevant details
-        // opencode structure: event.part.state.input contains tool arguments
+        // opencode structure: event.part.state.input contains tool arguments,
+        // but some tools may have input at event.part.input directly
         const toolName = event.part?.tool || event.part?.name || 'unknown';
-        const toolInput = event.part?.state?.input;
+        const toolInput = event.part?.state?.input ?? event.part?.input;
         events.push({ type: 'tool_use', name: toolName, input: toolInput });
         break;
       }
@@ -90,18 +185,6 @@ function parseOpenCodeJsonLine(jsonLine: string): AgentDisplayEvent[] {
 }
 
 /**
- * Parse opencode JSON stream output into display events.
- */
-function parseOpenCodeOutputToEvents(data: string): AgentDisplayEvent[] {
-  const allEvents: AgentDisplayEvent[] = [];
-  for (const line of data.split('\n')) {
-    const events = parseOpenCodeJsonLine(line.trim());
-    allEvents.push(...events);
-  }
-  return allEvents;
-}
-
-/**
  * OpenCode agent plugin implementation.
  * Uses the `opencode run` command for non-interactive AI coding tasks.
  *
@@ -126,7 +209,14 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     supportsStreaming: true,
     supportsInterrupt: true,
     supportsFileContext: true,
-    supportsSubagentTracing: false,
+    supportsSubagentTracing: true,
+    skillsPaths: {
+      personal: '~/.config/opencode/skills',
+      repo: '.opencode/skills',
+    },
+    // NOTE: OpenCode's 'run' command does not have a --dir flag.
+    // It accepts a positional [project] path for TUI mode, but run mode
+    // relies on the spawn working directory.
   };
 
   /** AI provider (any string, validated by OpenCode CLI) */
@@ -134,6 +224,9 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
 
   /** Model name (without provider prefix) */
   private model?: string;
+
+  /** Model variant (provider-specific reasoning effort: high, max, minimal) */
+  private variant?: string;
 
   /** Agent type to use (general, build, plan) */
   private agent: string = 'general';
@@ -151,6 +244,12 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
 
     if (typeof config.model === 'string' && config.model.length > 0) {
       this.model = config.model;
+    }
+
+    // Accept any variant string - validation is delegated to OpenCode CLI
+    // Different models support different variant values (e.g., Gemini: minimal/high/max)
+    if (typeof config.variant === 'string' && config.variant.length > 0) {
+      this.variant = config.variant;
     }
 
     if (
@@ -182,6 +281,9 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
       };
     }
 
+    // Store the resolved path for execute() to use
+    this.commandPath = findResult.path;
+
     // Verify the binary works by running --version
     const versionResult = await this.runVersion(findResult.path);
 
@@ -204,7 +306,7 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     return {
       // ~/.local/share/opencode contains auth.json with OAuth tokens
       authPaths: ['~/.opencode', '~/.config/opencode', '~/.local/share/opencode'],
-      binaryPaths: ['/usr/local/bin', '~/.local/bin', '~/go/bin'],
+      binaryPaths: ['/usr/local/bin', '~/.local/bin', '~/go/bin', '/opt/homebrew/bin'],
       runtimePaths: [],
       requiresNetwork: true,
     };
@@ -217,9 +319,10 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
     command: string
   ): Promise<{ success: boolean; version?: string; error?: string }> {
     return new Promise((resolve) => {
-      const proc = spawn(command, ['--version'], {
+      const useShell = shouldUseWindowsShell(command);
+      const proc = spawn(useShell ? quoteForWindowsShell(command) : command, ['--version'], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        shell: true,
+        shell: useShell,
       });
 
       let stdout = '';
@@ -256,11 +359,11 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
         }
       });
 
-      // Timeout after 5 seconds
+      // Timeout after 15 seconds
       setTimeout(() => {
         proc.kill();
         resolve({ success: false, error: 'Timeout waiting for --version' });
-      }, 5000);
+      }, 15000);
     });
   }
 
@@ -328,6 +431,11 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
       args.push('--model', modelToUse);
     }
 
+    // Add model variant if specified
+    if (this.variant) {
+      args.push('--variant', this.variant);
+    }
+
     // Always use JSON format for streaming output parsing
     // This gives us structured events (text, tool_use, etc.) that we can format nicely
     args.push('--format', 'json');
@@ -339,46 +447,73 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
       }
     }
 
-    // Add prompt as positional argument
-    // opencode run expects the message as positional args, not stdin
-    args.push(prompt);
+    if (!shouldPassOpenCodePromptViaStdin(this.commandPath)) {
+      args.push(prompt);
+    }
 
     return args;
   }
 
   /**
+   * Provide the prompt via stdin instead of command args.
+   * This avoids shell interpretation issues with special characters in prompts
+   * on Windows where shell: true is required for wrapper script execution.
+   */
+  protected override getStdinInput(
+    prompt: string,
+    _files?: AgentFileContext[],
+    _options?: AgentExecuteOptions
+  ): string | undefined {
+    if (shouldPassOpenCodePromptViaStdin(this.commandPath)) {
+      return prompt;
+    }
+    return undefined;
+  }
+
+  /**
    * Override execute to parse opencode JSON output.
    * Wraps the onStdout/onStdoutSegments callbacks to parse JSONL events and extract displayable content.
+   * Also forwards raw JSONL messages to onJsonlMessage for subagent tracing.
    */
   override execute(
     prompt: string,
     files?: AgentFileContext[],
     options?: AgentExecuteOptions
   ): AgentExecutionHandle {
+    // Create streaming buffer with callbacks for display and tracing
+    const streamingBuffer = createOpenCodeJsonlBuffer({
+      onJsonlMessage: options?.onJsonlMessage,
+      onDisplayEvents: (events) => {
+        // Call TUI-native segments callback if provided
+        if (options?.onStdoutSegments) {
+          const segments = processAgentEventsToSegments(events);
+          if (segments.length > 0) {
+            options.onStdoutSegments(segments);
+          }
+        }
+        // Also call legacy string callback if provided
+        if (options?.onStdout) {
+          const parsed = processAgentEvents(events);
+          if (parsed.length > 0) {
+            options.onStdout(parsed);
+          }
+        }
+      },
+    });
+
     // Wrap callbacks to parse JSON events
     const parsedOptions: AgentExecuteOptions = {
       ...options,
-      onStdout: (options?.onStdout || options?.onStdoutSegments)
-        ? (data: string) => {
-            const events = parseOpenCodeOutputToEvents(data);
-            if (events.length > 0) {
-              // Call TUI-native segments callback if provided
-              if (options?.onStdoutSegments) {
-                const segments = processAgentEventsToSegments(events);
-                if (segments.length > 0) {
-                  options.onStdoutSegments(segments);
-                }
-              }
-              // Also call legacy string callback if provided
-              if (options?.onStdout) {
-                const parsed = processAgentEvents(events);
-                if (parsed.length > 0) {
-                  options.onStdout(parsed);
-                }
-              }
-            }
-          }
+      onStdout: (options?.onStdout || options?.onStdoutSegments || options?.onJsonlMessage)
+        ? (data: string) => streamingBuffer.push(data)
         : undefined,
+      // Wrap onEnd to flush any remaining buffered content
+      onEnd: (result) => {
+        // Flush buffer before calling original onEnd
+        streamingBuffer.flush();
+        // Call the original onEnd if provided
+        options?.onEnd?.(result);
+      },
     };
 
     return super.execute(prompt, files, parsedOptions);
@@ -423,7 +558,23 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
       return 'Invalid agent type. Must be one of: general, build, plan';
     }
 
+    // Variant validation is delegated to OpenCode CLI - different models support different values
+
     return null;
+  }
+
+  /**
+   * Get OpenCode-specific suggestions for preflight failures.
+   * Provides actionable guidance for common configuration issues.
+   */
+  protected override getPreflightSuggestion(): string {
+    return (
+      'Common fixes for OpenCode:\n' +
+      '  1. Test OpenCode directly: opencode run "hello"\n' +
+      '  2. Configure a default model in ~/.config/opencode/opencode.json\n' +
+      '  3. Verify your API key is set for the chosen provider\n' +
+      '  4. Try specifying a model: ralph-tui run --model anthropic/claude-3-5-sonnet'
+    );
   }
 
   /**

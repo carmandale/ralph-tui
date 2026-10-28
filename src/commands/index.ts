@@ -68,3 +68,32 @@ export {
   parseDocsArgs,
   printDocsHelp,
 } from './docs.js';
+
+export {
+  executeDoctorCommand,
+  printDoctorHelp,
+} from './doctor.js';
+
+export {
+  executeInfoCommand,
+  collectSystemInfo,
+  formatSystemInfo,
+  formatForBugReport,
+} from './info.js';
+
+export {
+  executeSkillsCommand,
+  printSkillsHelp,
+} from './skills.js';
+
+export {
+  executeListenCommand,
+  parseListenArgs,
+  printListenHelp,
+} from './listen.js';
+
+export {
+  executeRemoteCommand,
+  parseRemoteArgs,
+  printRemoteHelp,
+} from './remote.js';

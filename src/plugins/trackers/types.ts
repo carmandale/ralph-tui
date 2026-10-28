@@ -71,6 +71,35 @@ export interface TrackerTask {
 }
 
 /**
+ * Execution scope selected for a run.
+ * A scope is usually a tracker epic/parent issue, or a PRD when using file-backed tasks.
+ */
+export interface ExecutionScope {
+  /** Stable scope identifier from the tracker */
+  id: string;
+
+  /** Human-readable scope title */
+  title: string;
+
+  /** Scope kind */
+  type: 'epic' | 'prd' | 'tracker';
+
+  /** Optional scope description */
+  description?: string;
+
+  /** Tracker-specific scope metadata */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Tracker task annotated with the execution scope it belongs to.
+ */
+export interface ScopedTrackerTask extends TrackerTask {
+  /** Scope that produced this task */
+  executionScope?: ExecutionScope;
+}
+
+/**
  * Result of completing a task
  */
 export interface TaskCompletionResult {
@@ -354,6 +383,43 @@ export interface TrackerPlugin {
    * Called when Ralph TUI shuts down.
    */
   dispose(): Promise<void>;
+
+  /**
+   * Get the prompt template for this tracker.
+   * Each tracker provides its own Handlebars template for rendering prompts.
+   * @returns The Handlebars template string
+   */
+  getTemplate(): string;
+
+  /**
+   * Get PRD context for prompt rendering.
+   * Returns the project/feature context that should be included in prompts.
+   * For JSON tracker: reads the source PRD markdown file.
+   * For Beads tracker: could return epic description or linked PRD.
+   *
+   * @returns PRD context object or null if not available
+   */
+  getPrdContext?(): Promise<{
+    /** PRD/feature name */
+    name: string;
+    /** Brief description */
+    description?: string;
+    /** Full PRD content (markdown) */
+    content: string;
+    /** Number of completed tasks */
+    completedCount: number;
+    /** Total number of tasks */
+    totalCount: number;
+  } | null>;
+
+  /**
+   * Get paths to state files that should be preserved during git merges.
+   * Used by parallel execution to prevent worker branches from overwriting
+   * tracker state (e.g., task completion status) during merge operations.
+   *
+   * @returns Array of absolute file paths that contain tracker state
+   */
+  getStateFiles?(): string[];
 }
 
 /**

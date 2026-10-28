@@ -1,0 +1,149 @@
+---
+title: info
+description: Display system information for bug reports.
+---
+
+## Synopsis
+
+```bash
+ralph-tui info [options]
+```
+
+The `info` command collects and displays diagnostic information about your ralph-tui installation. This is useful for including in bug reports.
+
+## Options
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output in JSON format |
+| `--copyable`, `-c` | Output in copyable format for bug reports |
+| `--cwd <path>` | Working directory (default: current directory) |
+| `-h`, `--help` | Show help message |
+
+## Information Collected
+
+The info command gathers:
+
+- **ralph-tui version** - Installed version of ralph-tui
+- **Runtime** - Bun or Node.js version
+- **Operating system** - Platform, release, and architecture
+- **Configuration** - Global and project config file locations and status
+- **Templates** - Installed prompt templates
+- **Agent** - Configured agent and detection status
+- **Tracker** - Configured task tracker
+
+## Examples
+
+### Basic Usage
+
+```bash
+# Display system info
+ralph-tui info
+```
+
+### Output Formats
+
+```bash
+# JSON output for scripts
+ralph-tui info --json
+
+# Copyable format for bug reports
+ralph-tui info -c
+ralph-tui info --copyable
+```
+
+### Sample Output
+
+**Default output:**
+
+```
+ralph-tui System Information
+============================
+
+ralph-tui version: 0.2.1
+Runtime: bun 1.2.5
+OS: linux 6.18.3 (x64)
+
+Configuration:
+  Global config: /home/user/.config/ralph-tui/config.toml
+    Exists: yes
+  Project config: /home/user/project/.ralph-tui/config.toml
+    Exists: yes
+
+Templates:
+  Directory: /home/user/.config/ralph-tui/templates
+  Installed: default.hbs, custom.hbs
+
+Agent:
+  Configured: claude
+  Available: yes
+  Version: 1.0.28
+
+Tracker:
+  Configured: beads
+
+Tip: Use ralph-tui info -c for a copyable bug report format
+```
+
+**Copyable format (`-c`):**
+
+```
+ralph-tui: 0.2.1
+runtime: bun 1.2.5
+os: linux 6.18.3 (x64)
+agent: claude v1.0.28
+tracker: beads
+global-config: yes
+project-config: yes
+templates: default.hbs, custom.hbs
+```
+
+**JSON format (`--json`):**
+
+```json
+{
+  "version": "0.2.1",
+  "runtime": {
+    "name": "bun",
+    "version": "1.2.5"
+  },
+  "os": {
+    "platform": "linux",
+    "release": "6.18.3",
+    "arch": "x64"
+  },
+  "config": {
+    "globalPath": "/home/user/.config/ralph-tui/config.toml",
+    "globalExists": true,
+    "projectPath": "/home/user/project/.ralph-tui/config.toml",
+    "projectExists": true
+  },
+  "templates": {
+    "globalDir": "/home/user/.config/ralph-tui/templates",
+    "installed": ["default.hbs", "custom.hbs"]
+  },
+  "agent": {
+    "name": "claude",
+    "available": true,
+    "version": "1.0.28"
+  },
+  "tracker": {
+    "name": "beads"
+  }
+}
+```
+
+## Filing Bug Reports
+
+When filing a bug report, include the copyable format output:
+
+1. Run `ralph-tui info -c`
+2. Copy the output
+3. Paste into your bug report on GitHub
+
+This helps maintainers quickly understand your environment and reproduce issues.
+
+## Related Commands
+
+- [`doctor`](/docs/cli/doctor) - Diagnose agent configuration issues
+- [`setup`](/docs/cli/setup) - Configure your project

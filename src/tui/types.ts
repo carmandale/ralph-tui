@@ -5,9 +5,10 @@
 
 import type { TaskStatus, RalphStatus } from './theme.js';
 import type { IterationResult, SubagentTreeNode, ActiveAgentState, RateLimitState } from '../engine/types.js';
-import type { TaskPriority } from '../plugins/trackers/types.js';
+import type { ExecutionScope, TaskPriority } from '../plugins/trackers/types.js';
 import type { SubagentDetailLevel, SandboxConfig, SandboxMode } from '../config/types.js';
 import type { FormattedSegment } from '../plugins/agents/output-formatting.js';
+import type { TokenUsageSummary } from '../plugins/agents/usage.js';
 
 // Re-export types for convenience
 export type { TaskPriority };
@@ -65,8 +66,12 @@ export interface TaskItem {
   updatedAt?: string;
   /** Parent task/epic ID for hierarchical display */
   parentId?: string;
+  /** Execution scope this task belongs to during multi-epic runs */
+  executionScope?: ExecutionScope;
   /** Tracker-specific metadata (varies by plugin) */
   metadata?: Record<string, unknown>;
+  /** Task-level token/context usage indicators */
+  usage?: TokenUsageSummary;
 }
 
 /**
@@ -105,6 +110,12 @@ export interface HeaderProps {
   sandboxConfig?: SandboxConfig;
   /** Resolved sandbox mode (when mode is 'auto', this shows what it resolved to) */
   resolvedSandboxMode?: Exclude<SandboxMode, 'auto'>;
+  /** Remote instance info (when viewing a remote) */
+  remoteInfo?: {
+    name: string;
+    host: string;
+    port: number;
+  };
 }
 
 /**
@@ -125,8 +136,9 @@ export interface LeftPanelProps {
  * View mode for the right panel details area
  * - 'details': Show task metadata (title, ID, status, description, dependencies)
  * - 'output': Show full-height scrollable iteration output
+ * - 'prompt': Show the rendered prompt that will be sent to the agent
  */
-export type DetailsViewMode = 'details' | 'output';
+export type DetailsViewMode = 'details' | 'output' | 'prompt';
 
 /**
  * Timing information for an iteration (for output view display)
@@ -147,6 +159,11 @@ export interface IterationTimingInfo {
 /**
  * Props for the RightPanel (details) component
  */
+/**
+ * Connection status for remote instances
+ */
+export type ConnectionStatus = 'connected' | 'connecting' | 'disconnected' | 'reconnecting';
+
 export interface RightPanelProps {
   /** Currently selected task (null if none selected) */
   selectedTask: TaskItem | null;
@@ -156,6 +173,8 @@ export interface RightPanelProps {
   iterationOutput?: string;
   /** Current iteration output segments for TUI-native color rendering */
   iterationSegments?: FormattedSegment[];
+  /** Token/context usage for the selected task output */
+  taskUsage?: TokenUsageSummary;
   /** View mode for the details panel (details or output) */
   viewMode?: DetailsViewMode;
   /** Callback when view mode should be toggled */
@@ -166,23 +185,16 @@ export interface RightPanelProps {
   agentName?: string;
   /** Model being used (provider/model format) */
   currentModel?: string;
-  /**
-   * Subagent tracing detail level.
-   * Controls how much subagent information is shown:
-   * - 'off': No tracing, use raw output
-   * - 'minimal': Show start/complete events only
-   * - 'moderate': Show events + description + duration (collapsible)
-   * - 'full': Show events + nested output + hierarchy panel
-   */
-  subagentDetailLevel?: SubagentDetailLevel;
-  /** Subagent tree for the current iteration (hierarchical structure) */
-  subagentTree?: SubagentTreeNode[];
-  /** Set of collapsed subagent IDs (for section toggle state) */
-  collapsedSubagents?: Set<string>;
-  /** ID of the currently focused subagent section */
-  focusedSubagentId?: string;
-  /** Callback when a subagent section is toggled */
-  onSubagentToggle?: (id: string) => void;
+  /** Rendered prompt content for preview (when viewMode is 'prompt') */
+  promptPreview?: string;
+  /** Source of the template used for the prompt (e.g., 'tracker:beads', 'builtin:json') */
+  templateSource?: string;
+  /** Whether currently viewing a remote instance */
+  isViewingRemote?: boolean;
+  /** Connection status when viewing remote */
+  remoteConnectionStatus?: ConnectionStatus;
+  /** Alias of the remote being viewed */
+  remoteAlias?: string;
 }
 
 /**

@@ -18,7 +18,27 @@ import {
   executeCreatePrdCommand,
   executeConvertCommand,
   executeDocsCommand,
+  executeDoctorCommand,
+  executeInfoCommand,
+  executeSkillsCommand,
+  executeRemoteCommand,
 } from './commands/index.js';
+import { checkBunVersion } from './utils/validation.js';
+import pkg from '../package.json' with { type: 'json' };
+
+/**
+ * Minimum bun version required to run ralph-tui.
+ * Derived from the engines.bun field in package.json (single source of truth).
+ */
+const MIN_BUN_VERSION = pkg.engines.bun.replace(/^[^\d]*/, '');
+
+if (typeof Bun !== 'undefined') {
+  const versionError = checkBunVersion(Bun.version, MIN_BUN_VERSION);
+  if (versionError) {
+    console.error(versionError);
+    process.exit(1);
+  }
+}
 
 /**
  * Show CLI help message.
@@ -36,14 +56,20 @@ Commands:
   run [options]       Start Ralph execution
   resume [options]    Resume an interrupted session
   status [options]    Check session status (headless, for CI/scripts)
+  remote [subcommand] Manage remote server configurations
   logs [options]      View/manage iteration output logs
   setup [options]     Run interactive project setup (alias: init)
+  doctor [options]    Diagnose agent configuration issues
   config show         Display merged configuration
   template show       Display current prompt template
   template init       Copy default template for customization
+  template install    Alias for template init
+  skills list         List bundled skills
+  skills install      Install skills to ~/.claude/skills/
   plugins agents      List available agent plugins
   plugins trackers    List available tracker plugins
   docs [section]      Open documentation in browser
+  info [options]      Display system information for bug reports
   help, --help, -h    Show this help message
   version, --version, -v  Show version number
 
@@ -55,9 +81,11 @@ Run Options:
   --tracker <name>    Override tracker plugin (e.g., beads, beads-bv, json)
   --iterations <n>    Maximum iterations (0 = unlimited)
   --resume            Resume existing session (deprecated, use 'resume' command)
+  --reset-progress    Clear .ralph-tui/progress.md instead of preserving it
   --headless          Run without TUI (alias: --no-tui)
   --no-tui            Run without TUI, output structured logs to stdout
   --no-setup          Skip interactive setup even if no config exists
+  --verify            Run agent preflight check before starting
   --notify            Force enable desktop notifications
   --no-notify         Force disable desktop notifications
   --sandbox           Enable sandboxing (auto mode)
@@ -65,6 +93,9 @@ Run Options:
   --sandbox=sandbox-exec  Force sandbox-exec (macOS)
   --no-sandbox        Disable sandboxing
   --no-network        Disable network access in sandbox
+  --listen            Enable remote listener (WebSocket server)
+  --listen-port <n>   Port for remote listener (default: 7890)
+  --rotate-token      Rotate server token before starting listener
 
 Resume Options:
   --cwd <path>        Working directory
@@ -79,6 +110,15 @@ Convert Options:
   --to <format>       Target format: json
   --output, -o <path> Output file path (default: ./prd.json)
   --branch, -b <name> Git branch name (prompts if not provided)
+  --force, -f         Overwrite existing files
+
+Create-PRD Options:
+  --agent, -a <name>  Override agent plugin (e.g., claude, opencode)
+  --model <name>      Override model (e.g., opus, anthropic/claude-3-5-sonnet)
+  --variant <level>   Model variant/reasoning effort (e.g., minimal, high, max)
+  --output, -o <dir>  Output directory for PRD files (default: ./tasks)
+  --prd-skill <name>  PRD skill folder inside skills_dir
+  --timeout, -t <ms>  Timeout for AI agent calls (0 = no timeout)
   --force, -f         Overwrite existing files
 
 Examples:
@@ -100,8 +140,19 @@ Examples:
   ralph-tui plugins trackers             # List tracker plugins
   ralph-tui template show                # Show current prompt template
   ralph-tui template init                # Create custom template
+  ralph-tui doctor                       # Check if agent is properly configured
+  ralph-tui doctor --json                # JSON output for scripts
   ralph-tui docs                         # Open documentation in browser
   ralph-tui docs quickstart              # Open quick start guide
+  ralph-tui info                         # Display system info for bug reports
+  ralph-tui info -c                      # Copyable format for GitHub issues
+  ralph-tui skills list                  # List bundled skills
+  ralph-tui skills install --force       # Force reinstall all skills
+  ralph-tui run --listen                 # Run with remote listener enabled
+  ralph-tui run --listen --rotate-token  # Rotate token and start listener
+  ralph-tui remote add prod server:7890 --token abc  # Add remote
+  ralph-tui remote list                  # List remotes with status
+  ralph-tui remote test prod             # Test connectivity
 `);
 }
 
@@ -114,9 +165,7 @@ async function handleSubcommand(args: string[]): Promise<boolean> {
 
   // Version command
   if (command === 'version' || command === '--version' || command === '-v') {
-    // Dynamic import to get version from package.json
-    const pkg = await import('../package.json', { with: { type: 'json' } });
-    console.log(`ralph-tui ${pkg.default.version}`);
+    console.log(`ralph-tui ${pkg.version}`);
     return true;
   }
 
@@ -189,6 +238,30 @@ async function handleSubcommand(args: string[]): Promise<boolean> {
   // Docs command
   if (command === 'docs') {
     await executeDocsCommand(args.slice(1));
+    return true;
+  }
+
+  // Doctor command
+  if (command === 'doctor') {
+    await executeDoctorCommand(args.slice(1));
+    return true;
+  }
+
+  // Info command
+  if (command === 'info') {
+    await executeInfoCommand(args.slice(1));
+    return true;
+  }
+
+  // Skills command
+  if (command === 'skills') {
+    await executeSkillsCommand(args.slice(1));
+    return true;
+  }
+
+  // Remote command (manage remote configurations)
+  if (command === 'remote') {
+    await executeRemoteCommand(args.slice(1));
     return true;
   }
 

@@ -7,10 +7,21 @@
 import type { ReactNode } from 'react';
 import { colors, statusIndicators, layout, type RalphStatus } from '../theme.js';
 import type { SandboxConfig, SandboxMode } from '../../config/types.js';
+import { formatTokenCount } from '../utils/token-format.js';
 
 /**
  * Props for the ProgressDashboard component
  */
+/**
+ * Git repository information for display
+ */
+export interface GitInfo {
+  repoName?: string;
+  branch?: string;
+  isDirty?: boolean;
+  commitHash?: string;
+}
+
 export interface ProgressDashboardProps {
   /** Current Ralph execution status */
   status: RalphStatus;
@@ -30,6 +41,26 @@ export interface ProgressDashboardProps {
   sandboxConfig?: SandboxConfig;
   /** Resolved sandbox mode (when mode is 'auto', this shows what it resolved to) */
   resolvedSandboxMode?: Exclude<SandboxMode, 'auto'>;
+  /** Remote instance info (when viewing a remote) */
+  remoteInfo?: {
+    name: string;
+    host: string;
+    port: number;
+  };
+  /** Whether auto-commit is enabled */
+  autoCommit?: boolean;
+  /** Git repository information */
+  gitInfo?: GitInfo;
+  /** Number of currently active (running) parallel workers */
+  activeWorkerCount?: number;
+  /** Total number of parallel workers */
+  totalWorkerCount?: number;
+  /** Aggregated token usage across all tasks in the current run */
+  aggregateUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+  };
 }
 
 /**
@@ -42,28 +73,26 @@ function truncateText(text: string, maxWidth: number): string {
 }
 
 /**
- * Get sandbox display string from config
- * Shows resolved mode when mode is 'auto' (e.g., "auto (bwrap)")
+ * Get sandbox display info from config
+ * Always returns a display value with icon indicating enabled/disabled state
  */
 function getSandboxDisplay(
   sandboxConfig?: SandboxConfig,
   resolvedSandboxMode?: Exclude<SandboxMode, 'auto'>
-): string | null {
-  if (!sandboxConfig?.enabled) {
-    return null;
+): { enabled: boolean; icon: string; text: string } {
+  const isEnabled = sandboxConfig?.enabled && sandboxConfig.mode !== 'off';
+
+  if (!isEnabled) {
+    return { enabled: false, icon: '🔓', text: 'off' };
   }
 
   const mode = sandboxConfig.mode ?? 'auto';
-  if (mode === 'off') {
-    return null;
-  }
-
   // Show resolved mode when mode is 'auto' (e.g., "auto (bwrap)")
   const modeDisplay = mode === 'auto' && resolvedSandboxMode
     ? `auto (${resolvedSandboxMode})`
     : mode;
   const networkSuffix = sandboxConfig.network === false ? ' (no-net)' : '';
-  return `${modeDisplay}${networkSuffix}`;
+  return { enabled: true, icon: '🔒', text: `${modeDisplay}${networkSuffix}` };
 }
 
 /**
@@ -85,7 +114,7 @@ function getStatusDisplay(
       return { label: `Agent running${taskLabel}`, color: colors.status.success, indicator: statusIndicators.executing };
     }
     case 'pausing':
-      return { label: 'Pausing after current iteration...', color: colors.status.warning, indicator: statusIndicators.pausing };
+      return { label: 'Pausing (completing in-flight tasks)', color: colors.status.warning, indicator: statusIndicators.pausing };
     case 'paused':
       return { label: 'Paused - Press p to resume', color: colors.status.warning, indicator: statusIndicators.paused };
     case 'stopped':
@@ -94,6 +123,8 @@ function getStatusDisplay(
       return { label: 'All tasks complete!', color: colors.status.success, indicator: statusIndicators.complete };
     case 'idle':
       return { label: 'No more tasks available', color: colors.fg.muted, indicator: statusIndicators.idle };
+    case 'waiting':
+      return { label: 'Waiting for new tasks', color: colors.fg.muted, indicator: statusIndicators.waiting };
     case 'error':
       return { label: 'Failed - Check logs for details', color: colors.status.error, indicator: statusIndicators.blocked };
   }
@@ -113,9 +144,20 @@ export function ProgressDashboard({
   currentTaskTitle,
   sandboxConfig,
   resolvedSandboxMode,
+  remoteInfo,
+  autoCommit,
+  gitInfo,
+  activeWorkerCount,
+  totalWorkerCount,
+  aggregateUsage,
 }: ProgressDashboardProps): ReactNode {
   const statusDisplay = getStatusDisplay(status, currentTaskId);
   const sandboxDisplay = getSandboxDisplay(sandboxConfig, resolvedSandboxMode);
+
+  // Format git info for display
+  const gitDisplay = gitInfo?.branch
+    ? `${gitInfo.repoName ?? 'repo'}:${gitInfo.branch}${gitInfo.isDirty ? '*' : ''}`
+    : null;
 
   // Show current task title when executing
   const taskDisplay = currentTaskTitle && (status === 'executing' || status === 'running')
@@ -135,7 +177,7 @@ export function ProgressDashboard({
       style={{
         width: '100%',
         height: layout.progressDashboard.height,
-        flexDirection: 'column',
+        flexDirection: 'row',
         backgroundColor: colors.bg.secondary,
         padding: 1,
         border: true,
@@ -143,49 +185,111 @@ export function ProgressDashboard({
         overflow: 'hidden',
       }}
     >
-      {/* Top row: Status and Epic name */}
-      <box style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-        <box style={{ flexDirection: 'row', gap: 2, flexShrink: 1 }}>
+      {/* Left column: Status, remote, and current task */}
+      <box style={{ flexDirection: 'column', flexGrow: 1, flexShrink: 1, paddingRight: 2 }}>
+        {/* Status line */}
+        <box style={{ flexDirection: 'row', gap: 1 }}>
           <text>
             <span fg={statusDisplay.color}>{statusDisplay.indicator}</span>
             <span fg={statusDisplay.color}> {statusDisplay.label}</span>
           </text>
-          {epicName && (
-            <text fg={colors.accent.primary}>{epicName}</text>
-          )}
         </box>
-        <box style={{ flexDirection: 'row', gap: 2 }}>
+
+        {/* Remote info (if viewing remote) */}
+        {remoteInfo && (
+          <box style={{ flexDirection: 'row' }}>
+            <text fg={colors.accent.primary}>🌐 Remote: </text>
+            <text fg={colors.fg.primary}>{remoteInfo.name}</text>
+            <text fg={colors.fg.dim}> ({remoteInfo.host}:{remoteInfo.port})</text>
+          </box>
+        )}
+
+        {/* Epic name (if any) */}
+        {epicName && (
+          <box style={{ flexDirection: 'row' }}>
+            <text fg={colors.fg.muted}>Epic: </text>
+            <text fg={colors.accent.primary}>{epicName}</text>
+          </box>
+        )}
+
+        {/* Current task info - shown when executing */}
+        {taskDisplay && (
+          <box style={{ flexDirection: 'row', gap: 1 }}>
+            <text fg={colors.fg.muted}>Task:</text>
+            <text fg={colors.accent.tertiary}>{currentTaskId}</text>
+            <text fg={colors.fg.dim}>-</text>
+            <text fg={colors.fg.primary}>{taskDisplay}</text>
+          </box>
+        )}
+
+        {/* Parallel worker count - shown when workers are active */}
+        {activeWorkerCount !== undefined &&
+          activeWorkerCount !== null &&
+          activeWorkerCount > 0 &&
+          totalWorkerCount !== undefined &&
+          totalWorkerCount !== null && (
+          <box style={{ flexDirection: 'row' }}>
+            <text fg={colors.status.info}>Workers: </text>
+            <text fg={colors.status.success}>{activeWorkerCount} active</text>
+            <text fg={colors.fg.muted}> / {totalWorkerCount}</text>
+          </box>
+        )}
+      </box>
+
+      {/* Right column: Configuration items stacked */}
+      <box style={{ flexDirection: 'column', width: 45, flexShrink: 0 }}>
+        {/* Row 1: Agent and Model */}
+        <box style={{ flexDirection: 'row' }}>
           <text fg={colors.fg.secondary}>Agent: </text>
           <text fg={colors.accent.secondary}>{agentName}</text>
           {modelDisplay && (
             <>
-              <text fg={colors.fg.muted}> | </text>
+              <text fg={colors.fg.muted}> · </text>
               <text fg={colors.accent.primary}>{modelDisplay.display}</text>
             </>
           )}
-          <text fg={colors.fg.muted}> | </text>
+        </box>
+
+        {/* Row 2: Tracker */}
+        <box style={{ flexDirection: 'row' }}>
           <text fg={colors.fg.secondary}>Tracker: </text>
           <text fg={colors.accent.tertiary}>{trackerName}</text>
-          {sandboxDisplay && (
+          {aggregateUsage && (
             <>
-              <text fg={colors.fg.muted}> | </text>
-              <text fg={colors.fg.secondary}>Sandbox: </text>
-              <text fg={colors.status.info}>{sandboxDisplay}</text>
+              <text fg={colors.fg.muted}> · </text>
+              <text fg={colors.fg.secondary}>Σ I/O/T: </text>
+              <text fg={colors.accent.secondary}>{formatTokenCount(aggregateUsage.inputTokens)}</text>
+              <text fg={colors.fg.muted}>/</text>
+              <text fg={colors.accent.primary}>{formatTokenCount(aggregateUsage.outputTokens)}</text>
+              <text fg={colors.fg.muted}>/</text>
+              <text fg={colors.status.info}>{formatTokenCount(aggregateUsage.totalTokens)}</text>
             </>
           )}
         </box>
-      </box>
 
-      {/* Current task info row - only shown when executing */}
-      {taskDisplay && (
-        <box style={{ flexDirection: 'row', gap: 1 }}>
-          <text fg={colors.fg.muted}>Working on:</text>
-          <text fg={colors.accent.tertiary}>{currentTaskId}</text>
-          <text fg={colors.fg.secondary}>-</text>
-          <text fg={colors.fg.primary}>{taskDisplay}</text>
+        {/* Row 3: Git branch (own line) */}
+        <box style={{ flexDirection: 'row' }}>
+          <text fg={colors.fg.secondary}>Git: </text>
+          <text fg={gitInfo?.isDirty ? colors.status.warning : colors.accent.primary}>
+            {gitDisplay ?? 'not a repo'}
+          </text>
         </box>
-      )}
 
+        {/* Row 4: Sandbox and Auto-commit */}
+        <box style={{ flexDirection: 'row' }}>
+          <text fg={sandboxDisplay.enabled ? colors.status.success : colors.status.warning}>
+            {sandboxDisplay.icon}
+          </text>
+          <text fg={sandboxDisplay.enabled ? colors.status.info : colors.fg.muted}>
+            {' '}{sandboxDisplay.text}
+          </text>
+          <text fg={colors.fg.muted}> · </text>
+          <text fg={colors.fg.secondary}>Commit: </text>
+          <text fg={autoCommit ? colors.status.success : colors.fg.muted}>
+            {autoCommit ? '✓ auto' : '✗ manual'}
+          </text>
+        </box>
+      </box>
     </box>
   );
 }

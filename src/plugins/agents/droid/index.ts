@@ -6,7 +6,13 @@
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { platform } from 'node:os';
-import { BaseAgentPlugin } from '../base.js';
+import {
+  BaseAgentPlugin,
+  debugLog,
+  quoteForWindowsShell,
+  STDIO_DRAIN_GRACE_PERIOD_MS,
+  STDIO_DRAIN_MAX_WAIT_MS,
+} from '../base.js';
 import type {
   AgentPluginMeta,
   AgentPluginFactory,
@@ -30,8 +36,12 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     supportsStreaming: true,
     supportsInterrupt: true,
     supportsFileContext: false,
-    supportsSubagentTracing: true,
+    supportsSubagentTracing: false,
     structuredOutputFormat: 'jsonl',
+    skillsPaths: {
+      personal: '~/.factory/skills',
+      repo: '.factory/skills',
+    },
   };
 
   private model?: string;
@@ -39,8 +49,8 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
   // Default to true: droid exec cannot show interactive prompts without a TTY
   private skipPermissions = true;
   private enableTracing = true;
-  // Track effective subagent tracing support (can be disabled via config)
-  private effectiveSupportsSubagentTracing = true;
+  // Subagent tracing is not currently supported for Factory Droid
+  private effectiveSupportsSubagentTracing = false;
 
   /**
    * Returns meta with effectiveSupportsSubagentTracing applied.
@@ -114,6 +124,20 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
   }
 
   /**
+   * Get Droid-specific suggestions for preflight failures.
+   * Provides actionable guidance for common configuration issues.
+   */
+  protected override getPreflightSuggestion(): string {
+    return (
+      'Common fixes for Factory Droid:\n' +
+      '  1. Test Droid directly: droid exec "hello"\n' +
+      '  2. Verify your API key is configured\n' +
+      '  3. Check Droid is installed: droid --version\n' +
+      '  4. Ensure you have access to the Factory platform'
+    );
+  }
+
+  /**
    * Custom execute that uses 'ignore' for stdin to prevent Ink TTY issues.
    * The droid exec command passes prompt as argument, not stdin, so we don't need stdin.
    * Setting stdin to 'ignore' prevents Ink from trying to set raw mode on a piped stdin.
@@ -173,7 +197,7 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
 
     let proc;
     if (isWindows) {
-      proc = spawn(command, allArgs, {
+      proc = spawn(quoteForWindowsShell(command), allArgs, {
         cwd: options?.cwd ?? process.cwd(),
         env,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -212,24 +236,63 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     let stdout = '';
     let stderr = '';
     let interrupted = false;
+    let completed = false;
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    let drainFallbackId: ReturnType<typeof setTimeout> | undefined;
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
+    let exitAt: number | undefined;
 
     options?.onStart?.(executionId);
+
+    const clearDrainFallback = (): void => {
+      if (drainFallbackId !== undefined) {
+        clearTimeout(drainFallbackId);
+        drainFallbackId = undefined;
+      }
+    };
+
+    const deriveExitStatus = (
+      code: number | null,
+      signal: NodeJS.Signals | null
+    ): AgentExecutionStatus => {
+      if (interrupted) {
+        return 'interrupted';
+      }
+      if (signal === 'SIGTERM' || signal === 'SIGKILL') {
+        return timeoutId ? 'timeout' : 'interrupted';
+      }
+      if (code === 0) {
+        return 'completed';
+      }
+      return 'failed';
+    };
 
     proc.stdout?.on('data', (data: Buffer) => {
       const text = data.toString();
       stdout += text;
       options?.onStdout?.(text);
+      if (drainFallbackId !== undefined) {
+        scheduleDrainFallback();
+      }
     });
 
     proc.stderr?.on('data', (data: Buffer) => {
       const text = data.toString();
       stderr += text;
       options?.onStderr?.(text);
+      if (drainFallbackId !== undefined) {
+        scheduleDrainFallback();
+      }
     });
 
     const complete = (status: AgentExecutionStatus, exitCode?: number, error?: string) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
       if (timeoutId) clearTimeout(timeoutId);
+      clearDrainFallback();
       const endedAt = new Date();
       resolvePromise!({
         executionId,
@@ -245,22 +308,49 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
       });
     };
 
+    const scheduleDrainFallback = (): void => {
+      if (completed) {
+        return;
+      }
+      clearDrainFallback();
+      const remainingBudget = (exitAt ?? Date.now()) + STDIO_DRAIN_MAX_WAIT_MS - Date.now();
+      const delay = Math.min(STDIO_DRAIN_GRACE_PERIOD_MS, remainingBudget);
+      const finalize = (): void => {
+        drainFallbackId = undefined;
+        if (completed) {
+          return;
+        }
+        if (process.env.RALPH_DEBUG) {
+          debugLog(
+            `[DEBUG] Process stdio stayed open after drain: code=${exitCode}, ` +
+              `signal=${exitSignal}, execId=${executionId}`
+          );
+        }
+        complete(deriveExitStatus(exitCode, exitSignal), exitCode ?? undefined);
+        proc.stdout?.destroy();
+        proc.stderr?.destroy();
+      };
+
+      if (delay <= 0) {
+        finalize();
+        return;
+      }
+      drainFallbackId = setTimeout(finalize, delay);
+    };
+
     proc.on('error', (error) => {
       complete('failed', undefined, error.message);
     });
 
     proc.on('close', (code, signal) => {
-      let status: AgentExecutionStatus;
-      if (interrupted) {
-        status = 'interrupted';
-      } else if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-        status = timeoutId ? 'timeout' : 'interrupted';
-      } else if (code === 0) {
-        status = 'completed';
-      } else {
-        status = 'failed';
-      }
-      complete(status, code ?? undefined);
+      complete(deriveExitStatus(code, signal), code ?? undefined);
+    });
+
+    proc.on('exit', (code, signal) => {
+      exitCode = code;
+      exitSignal = signal;
+      exitAt = Date.now();
+      scheduleDrainFallback();
     });
 
     if (timeout > 0) {

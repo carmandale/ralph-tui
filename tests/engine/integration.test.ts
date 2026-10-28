@@ -4,6 +4,9 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type {
   EngineEvent,
   IterationResult,
@@ -92,6 +95,7 @@ function createControllableAgent(options: {
     async validateSetup() { return null; },
     validateModel() { return null; },
     async dispose() { currentExecution = undefined; },
+    getSandboxRequirements() { return { network: false, filesystem: 'read-only' as const }; },
   };
 
   return { agent, getCallCount: () => callIndex };
@@ -101,6 +105,7 @@ function createControllableAgent(options: {
 function createControllableTracker(options: {
   tasks?: TrackerTask[];
   completesAfter?: number;
+  onUpdateTaskStatus?: (taskId: string, status: string) => void;
 } = {}) {
   let tasks = options.tasks ?? createTrackerTasks(2);
   let completedCount = 0;
@@ -112,6 +117,9 @@ function createControllableTracker(options: {
       name: 'Test Tracker',
       description: 'Test tracker for integration tests',
       version: '1.0.0',
+      supportsBidirectionalSync: false,
+      supportsHierarchy: false,
+      supportsDependencies: false,
     },
     async initialize() {},
     async isReady() { return true; },
@@ -169,6 +177,7 @@ function createControllableTracker(options: {
       return [];
     },
     async updateTaskStatus(taskId, status) {
+      options.onUpdateTaskStatus?.(taskId, status);
       const task = tasks.find(t => t.id === taskId);
       if (task) {
         task.status = status;
@@ -189,6 +198,7 @@ function createControllableTracker(options: {
     getSetupQuestions() { return []; },
     async validateSetup() { return null; },
     async dispose() {},
+    getTemplate() { return ''; },  // Empty string signals to use builtin template
   };
 
   return { tracker, getTasks: () => tasks, getCompletedCount: () => completedCount };
@@ -201,52 +211,65 @@ let mockTrackerRegistry: ReturnType<typeof createControllableTracker>;
 
 describe('ExecutionEngine Integration', () => {
   let events: EngineEvent[];
+  let tempDir: string;
 
   beforeEach(async () => {
     events = [];
-    
+
+    // Create temp directory for each test to allow real logging
+    tempDir = await mkdtemp(join(tmpdir(), 'ralph-integration-test-'));
+
     // Reset mocks for each test
     mockAgentRegistry = createControllableAgent();
     mockTrackerRegistry = createControllableTracker();
-    
+
+    // @ts-expect-error - Bun supports query strings in imports to get fresh module instances
+    const actualAgentRegistryModule = await import('../../src/plugins/agents/registry.js?test-reload') as typeof import('../../src/plugins/agents/registry.js');
+    // @ts-expect-error - Bun supports query strings in imports to get fresh module instances
+    const actualTrackerRegistryModule = await import('../../src/plugins/trackers/registry.js?test-reload') as typeof import('../../src/plugins/trackers/registry.js');
+
     // Mock the modules
     mock.module('../../src/plugins/agents/registry.js', () => ({
+      ...actualAgentRegistryModule,
       getAgentRegistry: () => ({
         getInstance: () => Promise.resolve(mockAgentRegistry.agent),
       }),
     }));
 
     mock.module('../../src/plugins/trackers/registry.js', () => ({
+      ...actualTrackerRegistryModule,
       getTrackerRegistry: () => ({
         getInstance: () => Promise.resolve(mockTrackerRegistry.tracker),
       }),
     }));
 
+    // Import and re-export all session functions to prevent mock pollution
+    const sessionModule = await import('../../src/session/index.js');
+
     mock.module('../../src/session/index.js', () => ({
+      // Re-export everything from real module first
+      ...sessionModule,
+      // Then override with mocked functions
       updateSessionIteration: () => Promise.resolve(),
       updateSessionStatus: () => Promise.resolve(),
       updateSessionMaxIterations: () => Promise.resolve(),
     }));
 
-    mock.module('../../src/logs/index.js', () => ({
-      saveIterationLog: () => Promise.resolve(),
-      appendProgress: () => Promise.resolve(),
-      getRecentProgressSummary: () => Promise.resolve(''),
-      buildSubagentTrace: () => undefined,
-      createProgressEntry: () => ({ iteration: 1, status: 'completed' }),
-    }));
-
-    mock.module('../../src/templates/index.js', () => ({
-      renderPrompt: () => ({ success: true, prompt: 'Test prompt for task' }),
-    }));
+    // NOTE: Do NOT mock logs/index.js - it causes pollution across test files
+    // due to Bun's known bug with mock.module (see: https://github.com/oven-sh/bun/issues/12823)
+    // The real logging functions work fine for integration tests since they use temp directories
 
     // Import ExecutionEngine after mocking
     const engineModule = await import('../../src/engine/index.js');
     ExecutionEngine = engineModule.ExecutionEngine;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     mock.restore();
+    // Clean up temp directory
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 
   describe('SELECT → BUILD → EXECUTE → DETECT cycle', () => {
@@ -260,9 +283,11 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 10,
         iterationDelay: 0,
+        watch: false,
+        pollIntervalMs: 30000,
         agent: { name: 'test', plugin: 'test', options: {} },
         tracker: { name: 'test', plugin: 'test', options: {} },
         errorHandling: { strategy: 'skip', maxRetries: 3, retryDelayMs: 0, continueOnNonZeroExit: false },
@@ -313,9 +338,11 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 10,
         iterationDelay: 0,
+        watch: false,
+        pollIntervalMs: 30000,
         agent: { name: 'test', plugin: 'test', options: {} },
         tracker: { name: 'test', plugin: 'test', options: {} },
         errorHandling: { strategy: 'skip', maxRetries: 3, retryDelayMs: 0, continueOnNonZeroExit: false },
@@ -355,9 +382,11 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 2,
         iterationDelay: 0,
+        watch: false,
+        pollIntervalMs: 30000,
         agent: { name: 'test', plugin: 'test', options: {} },
         tracker: { name: 'test', plugin: 'test', options: {} },
         errorHandling: { strategy: 'skip', maxRetries: 3, retryDelayMs: 0, continueOnNonZeroExit: false },
@@ -395,7 +424,7 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 10,
         iterationDelay: 0,
         agent: { name: 'test', plugin: 'test', options: {} },
@@ -429,7 +458,7 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 10,
         iterationDelay: 0,
         agent: { name: 'test', plugin: 'test', options: {} },
@@ -468,7 +497,7 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 10,
         iterationDelay: 0,
         agent: { name: 'test', plugin: 'test', options: {} },
@@ -499,7 +528,7 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 10,
         iterationDelay: 0,
         agent: { name: 'test', plugin: 'test', options: {} },
@@ -530,7 +559,7 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 10,
         iterationDelay: 0,
         agent: { name: 'test', plugin: 'test', options: {} },
@@ -562,7 +591,7 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 1,
         iterationDelay: 0,
         agent: { name: 'test', plugin: 'test', options: {} },
@@ -591,13 +620,15 @@ describe('ExecutionEngine Integration', () => {
       });
 
       const tasks = [createTrackerTask({ id: 'task-001', status: 'open' })];
+      const ordering: string[] = [];
       mockTrackerRegistry = createControllableTracker({
         tasks,
         completesAfter: 1,
+        onUpdateTaskStatus: () => ordering.push('tracker:updateTaskStatus'),
       });
 
       const engine = new ExecutionEngine({
-        cwd: '/test',
+        cwd: tempDir,
         maxIterations: 10,
         iterationDelay: 0,
         agent: { name: 'test', plugin: 'test', options: {} },
@@ -605,7 +636,12 @@ describe('ExecutionEngine Integration', () => {
         errorHandling: { strategy: 'skip', maxRetries: 0, retryDelayMs: 0, continueOnNonZeroExit: false },
       } as any);
 
-      engine.on((event) => events.push(event));
+      engine.on((event) => {
+        events.push(event);
+        if (event.type === 'task:activated') {
+          ordering.push('event:task:activated');
+        }
+      });
 
       await engine.initialize();
 
@@ -615,6 +651,10 @@ describe('ExecutionEngine Integration', () => {
       // Verify task was activated
       const activatedEvent = events.find(e => e.type === 'task:activated');
       expect(activatedEvent).toBeDefined();
+      expect(ordering).toEqual([
+        'event:task:activated',
+        'tracker:updateTaskStatus',
+      ]);
 
       await engine.dispose();
     });

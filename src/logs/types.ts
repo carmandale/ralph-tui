@@ -5,10 +5,30 @@
 
 import type { IterationStatus, ActiveAgentReason } from '../engine/types.js';
 import type { SubagentEvent, SubagentState } from '../plugins/agents/tracing/types.js';
+import type { TokenUsageSummary } from '../plugins/agents/usage.js';
+
+/**
+ * Summary of what was accomplished in an iteration.
+ * Extracted from agent output and git state after completion.
+ * This is the human-readable summary section for context recovery.
+ */
+export interface IterationSummary {
+  /** Bullet points describing what was accomplished */
+  whatWasDone: string[];
+
+  /** Files that were changed (from git diff --name-only) */
+  filesChanged: string[];
+
+  /** Git commit hash after successful completion */
+  commitHash?: string;
+
+  /** Key learnings extracted from agent output */
+  learnings: string[];
+}
 
 /**
  * Entry recording an agent switch during an iteration.
- * Tracks when and why the engine switched between primary and fallback agents.
+ * Tracks when and why the engine switched between active agents.
  */
 export interface AgentSwitchEntry {
   /** ISO 8601 timestamp when the switch occurred */
@@ -65,6 +85,9 @@ export interface IterationLogMetadata {
   /** Duration in milliseconds */
   durationMs: number;
 
+  /** Token usage summary for this iteration (if available) */
+  usage?: TokenUsageSummary;
+
   /** Error message if iteration failed */
   error?: string;
 
@@ -82,6 +105,18 @@ export interface IterationLogMetadata {
 
   /** Summary of how iteration completed (e.g., 'Completed on fallback (opencode) due to rate limit') */
   completionSummary?: string;
+
+  /** Structured summary of what was accomplished (for context recovery) */
+  summary?: IterationSummary;
+
+  /** Sandbox mode used for this iteration ('docker', 'seatbelt', 'off') */
+  sandboxMode?: string;
+
+  /** Resolved sandbox mode when configured mode was 'auto' */
+  resolvedSandboxMode?: string;
+
+  /** Whether network access was enabled in sandbox */
+  sandboxNetwork?: boolean;
 }
 
 /**

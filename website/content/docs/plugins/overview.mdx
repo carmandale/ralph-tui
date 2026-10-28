@@ -27,8 +27,8 @@ Agent plugins connect to AI coding assistants that execute tasks. They handle:
 
 **Built-in agents:**
 - **[Claude Code](/docs/plugins/agents/claude)** - Anthropic's Claude CLI with subagent tracing
-- **[OpenCode](/docs/plugins/agents/opencode)** - Open-source multi-provider agent
-- **[Factory Droid](/docs/plugins/agents/droid)** - Factory Droid CLI with JSONL tracing
+- **[OpenCode](/docs/plugins/agents/opencode)** - Open-source multi-provider agent with subagent tracing
+- **[Factory Droid](/docs/plugins/agents/droid)** - Factory Droid CLI (no subagent tracing)
 
 ### Tracker Plugins
 
@@ -82,7 +82,7 @@ The execution engine orchestrates plugins:
 |---------|-------------|----------|--------------|
 | Provider | Anthropic | Multi-provider | Factory |
 | Models | sonnet, opus, haiku | Any via provider/model format | Factory model list |
-| Subagent Tracing | Yes (JSONL) | No | Yes (JSONL) |
+| Subagent Tracing | Yes (Task tool) | Yes (Task tool) | No |
 | File Context | Yes (--add-dir) | Yes (--file) | No (uses `--cwd`) |
 | Streaming | Yes | Yes | Yes |
 | Installation | `npm i -g @anthropic-ai/claude-code` | `curl -fsSL https://opencode.ai/install \| bash` | [Factory Droid CLI](https://docs.factory.ai/reference/cli-reference) |
@@ -121,9 +121,10 @@ The execution engine orchestrates plugins:
 
     ```bash
     ralph-tui run --tracker beads --epic my-epic
+    ralph-tui run --tracker beads --parallel --epic ui-epic --epic backend-epic
     ```
 
-    Issues sync across team members via git.
+    Issues sync across team members via git. Hierarchy trackers can also run one parallel session across multiple selected epics.
   </TabsContent>
   <TabsContent value="large">
     Use **Beads-BV tracker** for intelligent task selection:
@@ -199,6 +200,14 @@ Key methods for trackers:
 - `getNextTask(filter)` - Get highest priority ready task
 - `completeTask(id, reason)` - Mark task done
 - `updateTaskStatus(id, status)` - Update task state
+
+### Custom Plugins
+
+Add agent or tracker plugins as `.ts` or `.js` files under
+`~/.config/ralph-tui/plugins/agents/` or `~/.config/ralph-tui/plugins/trackers/`,
+each default-exporting a factory function. External packages should import
+plugin interfaces from `ralph-tui/plugin`; importing `ralph-tui` also loads the
+terminal renderer, and a mismatched `@opentui/core` copy can fail at import time.
 
 ## Next Steps
 

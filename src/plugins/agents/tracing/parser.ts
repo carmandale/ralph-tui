@@ -118,24 +118,35 @@ export class SubagentTraceParser {
 
   /**
    * Check if a message represents a Task tool invocation.
+   * Handles both "Task" (Claude) and "task" (OpenCode) tool names.
    */
   private isTaskToolInvocation(message: ClaudeJsonlMessage): boolean {
-    // Task tool invocations appear as tool use with name "Task"
-    if (message.tool?.name === 'Task') {
+    // Task tool invocations appear as tool use with name "Task" or "task"
+    // Use case-insensitive comparison to support all agents
+    if (message.tool?.name?.toLowerCase() === 'task') {
       return true;
     }
 
     // Also check raw message for tool_use content blocks
+    // Claude's format: {"type": "assistant", "message": {"content": [...]}}
     const raw = message.raw;
-    if (raw.type === 'assistant' && Array.isArray(raw.content)) {
-      for (const block of raw.content) {
+    const rawMessage = raw.message as { content?: unknown[] } | undefined;
+    const contentArray = Array.isArray(raw.content)
+      ? raw.content
+      : Array.isArray(rawMessage?.content)
+        ? rawMessage.content
+        : null;
+
+    if (raw.type === 'assistant' && contentArray) {
+      for (const block of contentArray) {
         if (
           typeof block === 'object' &&
           block !== null &&
           'type' in block &&
           block.type === 'tool_use' &&
           'name' in block &&
-          block.name === 'Task'
+          typeof block.name === 'string' &&
+          block.name.toLowerCase() === 'task'
         ) {
           return true;
         }
@@ -174,22 +185,33 @@ export class SubagentTraceParser {
     let toolUseId: string | undefined;
 
     // Extract tool input from message.tool or raw content blocks
+    // Claude's format: {"type": "assistant", "message": {"content": [...]}}
     if (message.tool?.input) {
       toolInput = message.tool.input;
-    } else if (raw.type === 'assistant' && Array.isArray(raw.content)) {
-      for (const block of raw.content) {
-        if (
-          typeof block === 'object' &&
-          block !== null &&
-          'type' in block &&
-          block.type === 'tool_use' &&
-          'name' in block &&
-          block.name === 'Task'
-        ) {
-          const toolBlock = block as Record<string, unknown>;
-          toolInput = toolBlock.input as Record<string, unknown>;
-          toolUseId = toolBlock.id as string;
-          break;
+    } else if (raw.type === 'assistant') {
+      const rawMessage = raw.message as { content?: unknown[] } | undefined;
+      const contentArray = Array.isArray(raw.content)
+        ? raw.content
+        : Array.isArray(rawMessage?.content)
+          ? rawMessage.content
+          : null;
+
+      if (contentArray) {
+        for (const block of contentArray) {
+          if (
+            typeof block === 'object' &&
+            block !== null &&
+            'type' in block &&
+            block.type === 'tool_use' &&
+            'name' in block &&
+            typeof block.name === 'string' &&
+            block.name.toLowerCase() === 'task'
+          ) {
+            const toolBlock = block as Record<string, unknown>;
+            toolInput = toolBlock.input as Record<string, unknown>;
+            toolUseId = toolBlock.id as string;
+            break;
+          }
         }
       }
     }
@@ -459,6 +481,15 @@ export class SubagentTraceParser {
    */
   getCurrentDepth(): number {
     return this.activeStack.length;
+  }
+
+  /**
+   * Get the active subagent stack (deepest first).
+   * Returns array of subagent IDs in order from deepest to shallowest.
+   * Empty array if no subagents are active.
+   */
+  getActiveStack(): string[] {
+    return [...this.activeStack].reverse();
   }
 
   /**

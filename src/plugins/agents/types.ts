@@ -25,6 +25,33 @@ export interface AgentDetectResult {
 }
 
 /**
+ * Result of a preflight check to verify the agent is fully operational.
+ * Preflight goes beyond detection by actually running a test prompt.
+ */
+export interface AgentPreflightResult {
+  /** Whether the agent successfully responded to a test prompt */
+  success: boolean;
+
+  /** Error message if preflight failed */
+  error?: string;
+
+  /** Helpful suggestion for resolving the issue */
+  suggestion?: string;
+
+  /** How long the preflight check took in milliseconds */
+  durationMs?: number;
+
+  /** Exit code from the preflight execution (for diagnostics) */
+  exitCode?: number;
+
+  /** Stderr output from the preflight execution (for diagnostics) */
+  stderr?: string;
+
+  /** Stdout output from the preflight execution (for diagnostics) */
+  stdout?: string;
+}
+
+/**
  * File context to pass to the agent for execution.
  */
 export interface AgentFileContext {
@@ -121,6 +148,13 @@ export interface AgentExecuteOptions {
 
   /** Enable subagent tracing for structured output (JSONL format for Claude) */
   subagentTracing?: boolean;
+
+  /**
+   * Callback for raw JSONL messages parsed by the agent.
+   * Used by the engine to track subagent activity without re-parsing output.
+   * The message object is the raw parsed JSON from the agent's JSONL output.
+   */
+  onJsonlMessage?: (message: Record<string, unknown>) => void;
 }
 
 /**
@@ -197,6 +231,9 @@ export interface AgentPluginConfig {
   /** Default timeout in milliseconds */
   timeout?: number;
 
+  /** Timeout in milliseconds for preflight checks (default: 30000) */
+  preflightTimeoutMs?: number;
+
   /** Plugin-specific configuration options */
   options: Record<string, unknown>;
 
@@ -209,6 +246,27 @@ export interface AgentPluginConfig {
 
   /** Rate limit handling configuration for this agent */
   rateLimitHandling?: RateLimitHandlingConfig;
+
+  /**
+   * Environment variables to exclude when spawning the agent process.
+   * Use this to prevent sensitive keys from being inherited by the agent.
+   * Supports exact names (e.g., "ANTHROPIC_API_KEY") or glob patterns (e.g., "*_API_KEY").
+   *
+   * @example ["ANTHROPIC_API_KEY"] - Exclude specific key
+   * @example ["*_API_KEY", "*_SECRET"] - Exclude all API keys and secrets
+   */
+  envExclude?: string[];
+
+  /**
+   * Environment variables to pass through despite matching default exclusion patterns.
+   * Use this to explicitly allow specific keys that are blocked by the built-in
+   * defaults (*_API_KEY, *_SECRET_KEY, *_SECRET).
+   * Supports exact names (e.g., "ANTHROPIC_API_KEY") or glob patterns.
+   *
+   * @example ["ANTHROPIC_API_KEY"] - Allow this specific key through
+   * @example ["MY_*"] - Allow all MY_* vars through even if they match *_API_KEY
+   */
+  envPassthrough?: string[];
 }
 
 export interface AgentSandboxRequirements {
@@ -216,6 +274,26 @@ export interface AgentSandboxRequirements {
   binaryPaths: string[];
   runtimePaths: string[];
   requiresNetwork: boolean;
+}
+
+/**
+ * Paths where an agent stores skills/plugins.
+ * Each agent has its own conventions for where skills are installed.
+ */
+export interface AgentSkillsPaths {
+  /**
+   * Personal/global skills directory (e.g., ~/.claude/skills/).
+   * Skills installed here are available across all projects.
+   * Path may use ~ for home directory.
+   */
+  personal: string;
+
+  /**
+   * Repository-local skills directory (e.g., .claude/skills/).
+   * Relative path from project root.
+   * Skills installed here are only available in the specific project.
+   */
+  repo: string;
 }
 
 /**
@@ -240,6 +318,9 @@ export interface AgentPluginMeta {
   /** Default command name for the agent CLI */
   defaultCommand: string;
 
+  /** Optional alternate command names used for auto-detection */
+  commandAliases?: string[];
+
   /** Whether the agent supports streaming output */
   supportsStreaming: boolean;
 
@@ -254,6 +335,13 @@ export interface AgentPluginMeta {
 
   /** Format of structured output when supportsSubagentTracing is true */
   structuredOutputFormat?: 'json' | 'jsonl';
+
+  /**
+   * Paths where this agent stores skills.
+   * If undefined, the agent does not support skill installation.
+   */
+  skillsPaths?: AgentSkillsPaths;
+
 }
 
 /**
@@ -355,6 +443,23 @@ export interface AgentPlugin {
    * @returns null if valid, or an error message string if invalid
    */
   validateModel(model: string): string | null;
+
+  /**
+   * List known model names for this agent.
+   * Agents with open-ended model identifiers should return an empty array.
+   * @returns Array of known model identifiers
+   */
+  listModels(): string[];
+
+  /**
+   * Run a preflight check to verify the agent is fully operational.
+   * This goes beyond detect() by actually running a minimal test prompt
+   * to verify the agent can process requests (e.g., has a valid model configured).
+   *
+   * @param options Optional configuration for the preflight check
+   * @returns Preflight result with success status and any error/suggestion
+   */
+  preflight(options?: { timeout?: number }): Promise<AgentPreflightResult>;
 
   /**
    * Clean up resources when the plugin is unloaded.

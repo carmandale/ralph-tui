@@ -23,20 +23,18 @@ export {
   getCustomTemplatePath,
   clearTemplateCache,
   getUserConfigDir,
-  getDefaultPromptFilename,
-  getUserPromptPath,
-  getBundledPrompt,
-  initializeUserPrompts,
+  installBuiltinTemplates,
+  installGlobalTemplates,
+  getProjectTemplatePath,
+  getGlobalTemplatePath,
 } from './engine.js';
 
 export {
   DEFAULT_TEMPLATE,
   BEADS_TEMPLATE,
+  BEADS_RUST_TEMPLATE,
   BEADS_BV_TEMPLATE,
+  BEADS_RUST_BV_TEMPLATE,
   JSON_TEMPLATE,
+  JIRA_TEMPLATE,
 } from './builtin.js';
-
-export {
-  PROMPT_JSON,
-  PROMPT_BEADS,
-} from './prompts.js';

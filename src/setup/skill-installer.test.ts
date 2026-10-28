@@ -2,6 +2,10 @@
  * ABOUTME: Tests for skill-installer utility functions.
  * Tests path resolution for bundled skills in both dev and production environments,
  * skill listing, installation, and related functionality.
+ *
+ * IMPORTANT: This file imports the real skill-installer module at file level using
+ * the ?test-reload query parameter to bypass any mocks from other test files.
+ * Bun's module mocking is global, so we need to ensure we get a fresh module instance.
  */
 
 import {
@@ -10,36 +14,35 @@ import {
   test,
   beforeEach,
   afterEach,
-  mock,
 } from 'bun:test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 
-// Restore any mocks before tests run to prevent mock leakage from other test files
-mock.restore();
-
-// Use dynamic import to get the real module after mock restoration
-const skillInstaller = await import('./skill-installer.js');
+// Import the real module with a unique query string to bypass any cached mocks from other test files
+// This is a Bun-specific workaround for module mock leakage between test files
+// TypeScript doesn't recognize query strings in imports, so we use @ts-expect-error
+// @ts-expect-error - Bun supports query strings in imports to get fresh module instances
+const skillInstaller = await import('./skill-installer.js?test-reload') as typeof import('./skill-installer.js');
 const {
-  getClaudeSkillsDir,
   getBundledSkillsDir,
   listBundledSkills,
-  isSkillInstalled,
-  installSkill,
-  installAllSkills,
-  installRalphTuiPrdSkill,
+  isSkillInstalledAt,
   computeSkillsPath,
+  expandTilde,
+  resolveSkillsPath,
+  getSkillSearchPaths,
+  getSkillStatusForAgent,
+  isSkillInstalledAtAnyPath,
+  AGENT_ID_MAP,
+  resolveAddSkillAgentId,
+  buildAddSkillInstallArgs,
+  isEloopOnlyFailure,
 } = skillInstaller;
 
-describe('getClaudeSkillsDir', () => {
-  test('returns path in user home directory', () => {
-    const skillsDir = getClaudeSkillsDir();
-    expect(skillsDir).toBe(join(homedir(), '.claude', 'skills'));
-  });
-});
+describe('skill-installer', () => {
 
-describe('computeSkillsPath', () => {
+  describe('computeSkillsPath', () => {
   test('returns bundled path when currentDir ends with dist', () => {
     const currentDir = '/home/user/project/dist';
     const result = computeSkillsPath(currentDir);
@@ -158,137 +161,317 @@ describe('listBundledSkills', () => {
   });
 });
 
-describe('isSkillInstalled', () => {
+describe('expandTilde', () => {
+  test('expands ~ to home directory', () => {
+    const result = expandTilde('~');
+    expect(result).toBe(homedir());
+  });
+
+  test('expands ~/ paths to home directory', () => {
+    const result = expandTilde('~/.claude/skills');
+    expect(result).toBe(join(homedir(), '.claude/skills'));
+  });
+
+  test('expands ~\\ paths to home directory (Windows-style)', () => {
+    const result = expandTilde('~\\.claude\\skills');
+    // join normalizes separators, so we check the result contains the home dir
+    expect(result.startsWith(homedir())).toBe(true);
+    expect(result).toContain('.claude');
+  });
+
+  test('returns non-tilde paths unchanged', () => {
+    const result = expandTilde('/absolute/path');
+    expect(result).toBe('/absolute/path');
+  });
+
+  test('returns relative paths unchanged', () => {
+    const result = expandTilde('.claude/skills');
+    expect(result).toBe('.claude/skills');
+  });
+
+  test('uses runtime HOME overrides when expanding paths', () => {
+    const originalHome = process.env.HOME;
+    process.env.HOME = '/tmp/ralph-test-home';
+
+    try {
+      const result = expandTilde('~/.claude/skills');
+      expect(result).toBe('/tmp/ralph-test-home/.claude/skills');
+    } finally {
+      process.env.HOME = originalHome;
+    }
+  });
+});
+
+describe('resolveSkillsPath', () => {
+  test('expands tilde paths', () => {
+    const result = resolveSkillsPath('~/.claude/skills');
+    expect(result).toBe(join(homedir(), '.claude/skills'));
+  });
+
+  test('joins repo-relative paths with cwd', () => {
+    const result = resolveSkillsPath('.claude/skills', '/home/user/project');
+    expect(result).toBe('/home/user/project/.claude/skills');
+  });
+
+  test('uses process.cwd() when no cwd provided for relative paths', () => {
+    const result = resolveSkillsPath('.claude/skills');
+    expect(result).toBe(join(process.cwd(), '.claude/skills'));
+  });
+
+  test('handles ~ alone', () => {
+    const result = resolveSkillsPath('~');
+    expect(result).toBe(homedir());
+  });
+
+  test('returns absolute paths unchanged', () => {
+    const result = resolveSkillsPath('/absolute/path/to/skills');
+    expect(result).toBe('/absolute/path/to/skills');
+  });
+
+  test('returns absolute paths unchanged even with cwd', () => {
+    const result = resolveSkillsPath('/absolute/path', '/some/cwd');
+    expect(result).toBe('/absolute/path');
+  });
+
+  test('handles Windows drive letter paths as absolute', () => {
+    // On all platforms, path.isAbsolute recognizes Windows paths
+    // Note: This tests the code path, actual behavior may vary by platform
+    const result = resolveSkillsPath('C:\\Users\\test\\skills');
+    // Should not prepend cwd if isAbsolute returns true
+    // On Linux, isAbsolute('C:\\...') returns false, so it will be joined
+    // This test documents current cross-platform behavior
+    if (process.platform === 'win32') {
+      expect(result).toBe('C:\\Users\\test\\skills');
+    } else {
+      // On POSIX, Windows paths are treated as relative
+      expect(result).toContain('C:');
+    }
+  });
+
+  test('handles Windows UNC paths', () => {
+    // UNC paths like \\server\share are absolute on Windows
+    const result = resolveSkillsPath('\\\\server\\share\\skills');
+    if (process.platform === 'win32') {
+      expect(result).toBe('\\\\server\\share\\skills');
+    } else {
+      // On POSIX, UNC paths are treated as relative
+      expect(result).toContain('server');
+    }
+  });
+});
+
+describe('isSkillInstalledAt', () => {
   let tempDir: string;
-  let originalHome: string | undefined;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'ralph-tui-skill-test-'));
-    originalHome = process.env.HOME;
-    // Note: We can't easily mock homedir() since it's called at import time
-    // These tests verify the function logic with the real home directory
   });
 
   afterEach(async () => {
-    if (originalHome !== undefined) {
-      process.env.HOME = originalHome;
-    }
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  test('returns false for non-existent skill', async () => {
-    const installed = await isSkillInstalled('definitely-not-a-real-skill-12345');
-    expect(installed).toBe(false);
+  test('returns false for non-existent skill in directory', async () => {
+    const result = await isSkillInstalledAt('non-existent-skill', tempDir);
+    expect(result).toBe(false);
   });
 });
 
-describe('installSkill', () => {
-  test('returns error for non-existent skill', async () => {
-    const skills = await listBundledSkills();
-    // Skip if no skills available (CI environment)
-    if (skills.length === 0) {
-      console.log('Skipping: No bundled skills found');
-      return;
-    }
-    const result = await installSkill('non-existent-skill-xyz');
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('not found in bundled skills');
+describe('isSkillInstalledAtAnyPath', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ralph-tui-skill-test-'));
   });
 
-  test('installs real bundled skill', async () => {
-    const skills = await listBundledSkills();
-    // Skip if no skills available (CI environment)
-    if (skills.length === 0) {
-      console.log('Skipping: No bundled skills found');
-      return;
-    }
-    // This will actually install to ~/.claude/skills/
-    // We test with a real skill to ensure the full flow works
-    const result = await installSkill('ralph-tui-prd', { force: true });
-    expect(result.success).toBe(true);
-    expect(result.path).toBeDefined();
-    expect(result.path).toContain('ralph-tui-prd');
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
   });
 
-  test('skips already installed skill without force', async () => {
-    const skills = await listBundledSkills();
-    // Skip if no skills available (CI environment)
-    if (skills.length === 0) {
-      console.log('Skipping: No bundled skills found');
-      return;
-    }
-    // First install
-    await installSkill('ralph-tui-prd', { force: true });
+  test('returns true when skill exists in any candidate directory', async () => {
+    const sharedDir = join(tempDir, '.agents', 'skills', 'ralph-tui-prd');
+    await mkdir(sharedDir, { recursive: true });
 
-    // Second install without force should skip
-    const result = await installSkill('ralph-tui-prd', { force: false });
-    expect(result.success).toBe(true);
-    expect(result.skipped).toBe(true);
-  });
+    const result = await isSkillInstalledAtAnyPath('ralph-tui-prd', [
+      join(tempDir, '.codex', 'skills'),
+      join(tempDir, '.agents', 'skills'),
+    ]);
 
-  test('overwrites with force option', async () => {
-    const skills = await listBundledSkills();
-    // Skip if no skills available (CI environment)
-    if (skills.length === 0) {
-      console.log('Skipping: No bundled skills found');
-      return;
-    }
-    // First install
-    await installSkill('ralph-tui-prd', { force: true });
-
-    // Second install with force should not skip
-    const result = await installSkill('ralph-tui-prd', { force: true });
-    expect(result.success).toBe(true);
-    expect(result.skipped).toBeFalsy();
+    expect(result).toBe(true);
   });
 });
 
-describe('installRalphTuiPrdSkill', () => {
-  test('installs the ralph-tui-prd skill', async () => {
-    const skills = await listBundledSkills();
-    // Skip if no skills available (CI environment)
-    if (skills.length === 0) {
-      console.log('Skipping: No bundled skills found');
-      return;
-    }
-    const result = await installRalphTuiPrdSkill({ force: true });
-    expect(result.success).toBe(true);
-    expect(result.path).toContain('ralph-tui-prd');
+describe('getSkillSearchPaths', () => {
+  test('adds shared .agents aliases for codex', () => {
+    const result = getSkillSearchPaths(
+      { personal: '~/.codex/skills', repo: '.codex/skills' },
+      '/tmp/project',
+      'codex'
+    );
+
+    expect(result.personal).toEqual([
+      join(homedir(), '.agents/skills'),
+      join(homedir(), '.codex/skills'),
+    ]);
+    expect(result.repo).toEqual([
+      '/tmp/project/.agents/skills',
+      '/tmp/project/.codex/skills',
+    ]);
   });
 
-  test('respects force option', async () => {
-    const skills = await listBundledSkills();
-    // Skip if no skills available (CI environment)
-    if (skills.length === 0) {
-      console.log('Skipping: No bundled skills found');
-      return;
-    }
-    // First install
-    await installRalphTuiPrdSkill({ force: true });
+  test('keeps native-only paths for claude', () => {
+    const result = getSkillSearchPaths(
+      { personal: '~/.claude/skills', repo: '.claude/skills' },
+      '/tmp/project',
+      'claude'
+    );
 
-    // Without force should skip
-    const result = await installRalphTuiPrdSkill({ force: false });
-    expect(result.success).toBe(true);
-    expect(result.skipped).toBe(true);
+    expect(result.personal).toEqual([join(homedir(), '.claude/skills')]);
+    expect(result.repo).toEqual(['/tmp/project/.claude/skills']);
+  });
+});
+
+describe('getSkillStatusForAgent', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'ralph-tui-skill-status-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  test('detects repo-installed skills in shared .agents alias paths', async () => {
+    await mkdir(join(tempDir, '.agents', 'skills', 'ralph-tui-prd'), { recursive: true });
+
+    const status = await getSkillStatusForAgent(
+      { personal: '~/.codex/skills', repo: '.codex/skills' },
+      tempDir,
+      'codex'
+    );
+
+    expect(status.get('ralph-tui-prd')?.repo).toBe(true);
   });
 });
 
-describe('installAllSkills', () => {
-  test('returns map of results', async () => {
-    const results = await installAllSkills({ force: true });
-    expect(results instanceof Map).toBe(true);
+describe('AGENT_ID_MAP', () => {
+  test('maps claude to claude-code', () => {
+    expect(AGENT_ID_MAP['claude']).toBe('claude-code');
   });
 
-  test('installs all bundled skills', async () => {
-    const skills = await listBundledSkills();
-    const results = await installAllSkills({ force: true });
+  test('maps opencode to opencode', () => {
+    expect(AGENT_ID_MAP['opencode']).toBe('opencode');
+  });
 
-    // Should have result for each skill
-    expect(results.size).toBe(skills.length);
+  test('maps codex to codex', () => {
+    expect(AGENT_ID_MAP['codex']).toBe('codex');
+  });
 
-    // All should succeed
-    for (const [_name, result] of results) {
-      expect(result.success).toBe(true);
-    }
+  test('maps gemini to gemini-cli', () => {
+    expect(AGENT_ID_MAP['gemini']).toBe('gemini-cli');
+  });
+
+  test('maps kiro to kiro-cli', () => {
+    expect(AGENT_ID_MAP['kiro']).toBe('kiro-cli');
   });
 });
+
+describe('resolveAddSkillAgentId', () => {
+  test('maps known ralph-tui IDs', () => {
+    expect(resolveAddSkillAgentId('claude')).toBe('claude-code');
+    expect(resolveAddSkillAgentId('opencode')).toBe('opencode');
+  });
+
+  test('passes through unknown IDs unchanged', () => {
+    expect(resolveAddSkillAgentId('cursor')).toBe('cursor');
+    expect(resolveAddSkillAgentId('windsurf')).toBe('windsurf');
+  });
+});
+
+describe('buildAddSkillInstallArgs', () => {
+  test('builds args for global install of all skills', () => {
+    const args = buildAddSkillInstallArgs({
+      agentId: 'claude',
+      global: true,
+    });
+    expect(args).toEqual(['add-skill', 'subsy/ralph-tui', '-a', 'claude-code', '-g', '-y']);
+  });
+
+  test('builds args for specific skill', () => {
+    const args = buildAddSkillInstallArgs({
+      agentId: 'opencode',
+      skillName: 'ralph-tui-prd',
+      global: true,
+    });
+    expect(args).toEqual(['add-skill', 'subsy/ralph-tui', '-s', 'ralph-tui-prd', '-a', 'opencode', '-g', '-y']);
+  });
+
+  test('omits -g flag when global is false', () => {
+    const args = buildAddSkillInstallArgs({
+      agentId: 'claude',
+      global: false,
+    });
+    expect(args).toEqual(['add-skill', 'subsy/ralph-tui', '-a', 'claude-code', '-y']);
+  });
+
+  test('defaults to global when not specified', () => {
+    const args = buildAddSkillInstallArgs({
+      agentId: 'claude',
+    });
+    expect(args).toContain('-g');
+  });
+
+  test('passes through unknown agent IDs', () => {
+    const args = buildAddSkillInstallArgs({
+      agentId: 'cursor',
+      global: true,
+    });
+    expect(args).toContain('-a');
+    expect(args).toContain('cursor');
+  });
+
+  test('adds --copy when copy mode is enabled', () => {
+    const args = buildAddSkillInstallArgs({
+      agentId: 'kiro',
+      global: true,
+      copy: true,
+    });
+    expect(args).toContain('--copy');
+    expect(args).toContain('kiro-cli');
+  });
+});
+
+describe('isEloopOnlyFailure', () => {
+  test('returns true for output containing only ELOOP errors', () => {
+    const output = 'Error: ELOOP: too many levels of symbolic links, mkdir\nELOOP: too many levels of symbolic links';
+    expect(isEloopOnlyFailure(output)).toBe(true);
+  });
+
+  test('returns false for output with ENOENT errors', () => {
+    const output = 'Error: ELOOP: too many levels\nENOENT: no such file or directory';
+    expect(isEloopOnlyFailure(output)).toBe(false);
+  });
+
+  test('returns false for output with EACCES errors', () => {
+    const output = 'Error: ELOOP: too many levels\nEACCES: permission denied';
+    expect(isEloopOnlyFailure(output)).toBe(false);
+  });
+
+  test('returns false for output without ELOOP', () => {
+    const output = 'Error: something went wrong';
+    expect(isEloopOnlyFailure(output)).toBe(false);
+  });
+
+  test('returns false for empty output', () => {
+    expect(isEloopOnlyFailure('')).toBe(false);
+  });
+
+  test('returns true for real add-skill ELOOP output', () => {
+    const output = `Installing skill ralph-tui-prd for claude-code...
+Error: ELOOP: too many levels of symbolic links, mkdir '/home/user/.claude/skills/ralph-tui-prd'
+24 installs failed`;
+    expect(isEloopOnlyFailure(output)).toBe(true);
+  });
+});
+}); // end describe('skill-installer')

@@ -79,19 +79,30 @@ interface SubagentTreeRowProps {
   activeSubagentId?: string;
   /** Maximum width for the row content (for truncation) */
   maxWidth: number;
+  /** Currently selected node ID (for keyboard navigation) */
+  selectedId?: string | 'main';
+  /** Whether the panel has keyboard focus (affects selection styling) */
+  isFocused?: boolean;
 }
 
 /**
  * Renders a single row in the subagent tree.
  * Format: [indent][status icon] [agent type] description [duration]
+ * Highlights based on: selection state with focus-aware styling
  */
 function SubagentTreeRow({
   node,
   activeSubagentId,
   maxWidth,
+  selectedId,
+  isFocused = false,
 }: SubagentTreeRowProps): ReactNode {
   const { state } = node;
+  const isSelected = selectedId === state.id;
   const isActive = state.id === activeSubagentId || state.status === 'running';
+  // Show selection highlight when selected, show active indicator for running nodes
+  const showSelectionHighlight = isSelected;
+  const showActiveIndicator = !isSelected && isActive;
   const statusIcon = getStatusIcon(state.status);
   const statusColor = getStatusColor(state.status);
 
@@ -108,6 +119,25 @@ function SubagentTreeRow({
   const descriptionWidth = Math.max(5, maxWidth - fixedWidth);
   const truncatedDescription = truncateText(state.description, descriptionWidth);
 
+  // Determine background color based on selection and focus state
+  // - Selected + focused: bright highlight
+  // - Selected + unfocused: muted highlight (still visible but dimmed)
+  // - Active (running): subtle highlight
+  // - Default: transparent
+  let bgColor = 'transparent';
+  if (showSelectionHighlight) {
+    bgColor = isFocused ? colors.bg.highlight : colors.bg.tertiary;
+  } else if (showActiveIndicator) {
+    bgColor = colors.bg.secondary;
+  }
+
+  // Text color: brighter when selected and focused
+  const textColor = showSelectionHighlight && isFocused
+    ? colors.fg.primary
+    : showSelectionHighlight
+      ? colors.fg.secondary
+      : colors.fg.secondary;
+
   return (
     <box
       style={{
@@ -115,14 +145,14 @@ function SubagentTreeRow({
         flexDirection: 'row',
         paddingLeft: 1,
         paddingRight: 1,
-        backgroundColor: isActive ? colors.bg.highlight : 'transparent',
+        backgroundColor: bgColor,
       }}
     >
       <text>
         <span fg={colors.fg.dim}>{indent}</span>
         <span fg={statusColor}>{statusIcon}</span>
         <span fg={colors.accent.tertiary}> {typeDisplay}</span>
-        <span fg={isActive ? colors.fg.primary : colors.fg.secondary}> {truncatedDescription}</span>
+        <span fg={textColor}> {truncatedDescription}</span>
         {durationStr && <span fg={colors.fg.muted}>{durationStr}</span>}
       </text>
     </box>
@@ -136,6 +166,8 @@ function SubagentTreeNodeRows({
   node,
   activeSubagentId,
   maxWidth,
+  selectedId,
+  isFocused,
 }: SubagentTreeRowProps): ReactNode {
   return (
     <>
@@ -143,6 +175,8 @@ function SubagentTreeNodeRows({
         node={node}
         activeSubagentId={activeSubagentId}
         maxWidth={maxWidth}
+        selectedId={selectedId}
+        isFocused={isFocused}
       />
       {node.children.map((child) => (
         <SubagentTreeNodeRows
@@ -150,6 +184,8 @@ function SubagentTreeNodeRows({
           node={child}
           activeSubagentId={activeSubagentId}
           maxWidth={maxWidth}
+          selectedId={selectedId}
+          isFocused={isFocused}
         />
       ))}
     </>
@@ -166,6 +202,18 @@ export interface SubagentTreePanelProps {
   activeSubagentId?: string;
   /** Panel width for truncation calculations */
   width?: number;
+  /** Current task ID (shown as root node, prep for parallel execution) */
+  currentTaskId?: string;
+  /** Current task title (shown as root node label) */
+  currentTaskTitle?: string;
+  /** Current task status for display icon */
+  currentTaskStatus?: 'running' | 'completed' | 'error' | 'idle';
+  /** Currently selected node ID (for keyboard navigation) - taskId for root, subagent ID for children */
+  selectedId?: string;
+  /** Callback when a node is selected */
+  onSelect?: (id: string) => void;
+  /** Whether this panel currently has keyboard focus (TAB navigation) */
+  isFocused?: boolean;
 }
 
 /**
@@ -212,14 +260,52 @@ function countSubagents(nodes: SubagentTreeNode[]): number {
 }
 
 /**
+ * Get status icon for main agent.
+ */
+function getMainAgentIcon(status: 'running' | 'completed' | 'error' | 'idle'): string {
+  switch (status) {
+    case 'running':
+      return '◉'; // Filled circle for main agent running
+    case 'completed':
+      return '✓';
+    case 'error':
+      return '✗';
+    default:
+      return '○';
+  }
+}
+
+/**
+ * Get status color for main agent.
+ */
+function getMainAgentColor(status: 'running' | 'completed' | 'error' | 'idle'): string {
+  switch (status) {
+    case 'running':
+      return colors.accent.primary;
+    case 'completed':
+      return colors.status.success;
+    case 'error':
+      return colors.status.error;
+    default:
+      return colors.fg.muted;
+  }
+}
+
+/**
  * SubagentTreePanel component showing a dedicated panel with subagent hierarchy.
- * Displays: agent type, description (truncated), status icon, duration.
- * Features: indented nested subagents, highlighted active subagent, auto-scroll.
+ * Displays: main agent at root, subagents as children with types, descriptions, status icons, durations.
+ * Features: indented nested subagents, highlighted active/selected nodes, auto-scroll.
  */
 export function SubagentTreePanel({
   tree,
   activeSubagentId,
   width = 45,
+  currentTaskId,
+  currentTaskTitle,
+  currentTaskStatus = 'running',
+  selectedId,
+  onSelect: _onSelect, // Reserved for future keyboard navigation
+  isFocused = false,
 }: SubagentTreePanelProps): ReactNode {
   // Calculate max width for row content (panel width minus padding and border)
   const maxRowWidth = Math.max(20, width - 4);
@@ -241,8 +327,10 @@ export function SubagentTreePanel({
 
   // Build title with counts
   const title = runningCount > 0
-    ? `Subagents (${runningCount} running / ${totalSubagents} total)`
-    : `Subagents (${totalSubagents})`;
+    ? `Agent Tree (${runningCount} active)`
+    : totalSubagents > 0
+      ? `Agent Tree (${totalSubagents})`
+      : 'Agent Tree';
 
   // Use a ref for auto-scroll behavior
   // Note: In @opentui/react, scrollbox auto-scrolls when content exceeds height
@@ -255,6 +343,15 @@ export function SubagentTreePanel({
     prevTreeLengthRef.current = totalSubagents;
   }, [totalSubagents]);
 
+  // Determine if task root is selected (selectedId matches currentTaskId or 'main' for backwards compat)
+  const isTaskRootSelected = selectedId === currentTaskId || selectedId === 'main';
+  const taskIcon = getMainAgentIcon(currentTaskStatus);
+  const taskColor = getMainAgentColor(currentTaskStatus);
+
+  // Determine border color based on focus state
+  // Simple: focused = accent, not focused = normal
+  const borderColor = isFocused ? colors.accent.primary : colors.border.normal;
+
   return (
     <box
       title={title}
@@ -266,7 +363,7 @@ export function SubagentTreePanel({
         flexDirection: 'column',
         backgroundColor: colors.bg.primary,
         border: true,
-        borderColor: effectiveActiveId ? colors.border.active : colors.border.normal,
+        borderColor,
       }}
     >
       <scrollbox
@@ -275,17 +372,51 @@ export function SubagentTreePanel({
           width: '100%',
         }}
       >
+        {/* Task root node - shows task ID and title */}
+        <box
+          style={{
+            width: '100%',
+            flexDirection: 'row',
+            paddingLeft: 1,
+            paddingRight: 1,
+            backgroundColor: isTaskRootSelected
+              ? (isFocused ? colors.bg.highlight : colors.bg.tertiary)
+              : 'transparent',
+          }}
+        >
+          <text>
+            <span fg={taskColor}>{taskIcon}</span>
+            <span fg={isTaskRootSelected && isFocused ? colors.fg.primary : colors.accent.primary}>
+              {' '}{currentTaskId || 'Task'}
+            </span>
+            {currentTaskTitle && (
+              <span fg={colors.fg.secondary}> {truncateText(currentTaskTitle, Math.max(0, maxRowWidth - (currentTaskId?.length || 4) - 10))}</span>
+            )}
+            {tree.length > 0 && <span fg={colors.fg.muted}> ({tree.length})</span>}
+          </text>
+        </box>
+
+        {/* Subagents as children */}
         {tree.length === 0 ? (
-          <box style={{ padding: 1 }}>
-            <text fg={colors.fg.muted}>No subagents spawned</text>
+          <box style={{ paddingLeft: 3 }}>
+            <text fg={colors.fg.muted}>└─ No subagents</text>
           </box>
         ) : (
           tree.map((node) => (
             <SubagentTreeNodeRows
               key={node.state.id}
-              node={node}
+              node={{
+                ...node,
+                state: {
+                  ...node.state,
+                  // Increase depth by 1 since main agent is at depth 0
+                  depth: node.state.depth + 1,
+                },
+              }}
               activeSubagentId={effectiveActiveId}
               maxWidth={maxRowWidth}
+              selectedId={selectedId}
+              isFocused={isFocused}
             />
           ))
         )}
