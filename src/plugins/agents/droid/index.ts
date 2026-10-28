@@ -144,13 +144,14 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
 
   extractAgentText(stdout: string): string | undefined {
     const parser = createDroidStreamingJsonlParser();
-    parser.push(stdout);
-    parser.flush();
-    const messages = parser.getState().messages;
-    if (messages.length === 0) return undefined;
+    const results = [...parser.push(stdout), ...parser.flush()];
+    if (!results.some((result) => result.success)) return undefined;
 
-    const events = messages.flatMap((message): AgentDisplayEvent[] => {
-      const parsed = parseDroidMessageToEvents(message);
+    const events = results.flatMap((result): AgentDisplayEvent[] => {
+      if (!result.success) {
+        return result.raw.trim() ? [{ type: 'system' }] : [];
+      }
+      const parsed = parseDroidMessageToEvents(result.message);
       return parsed.length ? parsed : [{ type: 'system' }];
     });
     return extractAgentTextFromEvents(events);

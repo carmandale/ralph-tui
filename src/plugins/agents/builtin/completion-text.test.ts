@@ -112,7 +112,7 @@ const cases = [
   },
   {
     plugin: new DroidAgentPlugin(),
-    narrative: (text: string) => ({ type: 'message', role: 'assistant', message: text }),
+    narrative: (text: string) => ({ type: 'message', role: 'assistant', text }),
     ignored: [
       { type: 'tool_result', toolId: 'Read', value: marker },
       { event: 'tool_result', toolId: 'Read', output: marker },
@@ -183,4 +183,22 @@ test('OpenCode excludes plugin log text from a structured stream', () => {
   const plugin = new OpenCodeAgentPlugin();
   const stdout = `[plugin] ${marker}\n${JSON.stringify({ type: 'reasoning', part: { text: marker } })}`;
   expect(plugin.extractAgentText(stdout)).toBe('');
+});
+
+describe('Droid mixed-output boundaries', () => {
+  const plugin = new DroidAgentPlugin();
+  const before = JSON.stringify({ type: 'message', text: '<promise>' });
+  const after = JSON.stringify({ type: 'message', text: 'COMPLETE</promise>' });
+
+  test.each(['plugin log line', '{invalid', 'null', '42', marker])(
+    'does not join narrative across unstructured output: %s',
+    (line) => {
+      expect(plugin.extractAgentText([before, line, after].join('\n')))
+        .toBe('<promise>\0COMPLETE</promise>');
+    }
+  );
+
+  test('ignores blank lines between adjacent narrative deltas', () => {
+    expect(plugin.extractAgentText([before, ' \t', after].join('\n'))).toBe(marker);
+  });
 });
