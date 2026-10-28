@@ -26,6 +26,7 @@ interface FixtureResult {
   currentAfterEnd: boolean;
   streamedStdout: string;
   streamedStderr: string;
+  currentHandlesMatch: boolean;
 }
 
 describe('DroidAgentPlugin process exit completion', () => {
@@ -118,7 +119,7 @@ describe('DroidAgentPlugin process exit completion', () => {
   });
 
   for (const direct of [false, true]) {
-    for (const mode of ['clean', 'fail', 'throw-on-end', 'timeout', 'interrupt', 'interrupt-all', 'early-interrupt']) {
+    for (const mode of ['clean', 'fail', 'throw-on-end', 'current-handle', 'timeout', 'interrupt', 'interrupt-all', 'early-interrupt']) {
       test(`${direct ? 'direct construction' : 'script shim'} inherits ${mode} lifecycle`, async () => {
         if (platform() === 'win32') return;
         const result = await runFixture(mode, {
@@ -129,6 +130,7 @@ describe('DroidAgentPlugin process exit completion', () => {
         const interrupted = mode.includes('interrupt');
         expect(result.status).toBe(interrupted ? 'interrupted' : mode === 'timeout' ? 'timeout' : mode === 'fail' ? 'failed' : 'completed');
         expect(result.interrupted).toBe(interrupted);
+        expect(result.currentHandlesMatch).toBe(true);
         if (mode === 'fail') expect(result.exitCode).toBe(7);
         if (mode === 'clean' || mode === 'throw-on-end') {
           expect(result.stdout).toBe(result.streamedStdout);
@@ -170,7 +172,7 @@ describe('DroidAgentPlugin process exit completion', () => {
     const command = join(tempDir, "fake droid's.ts");
     await writeFile(command, `#!${process.execPath}
 console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(),
-  tty: Boolean(process.stdin.isTTY), echo: require('node:child_process').execSync('stty -a').toString(),
+  tty: Boolean(process.stdin.isTTY), echo: require('node:child_process').execSync('stty -a', { stdio: ['inherit', 'pipe', 'pipe'] }).toString(),
   env: { CI: process.env.CI, TERM: process.env.TERM, NO_COLOR: process.env.NO_COLOR,
     FORCE_COLOR: process.env.FORCE_COLOR, INK_DISABLE_INPUT: process.env.INK_DISABLE_INPUT,
     secret: process.env.DROID_TEST_SECRET, explicit: process.env.DROID_EXPLICIT_VALUE } }));

@@ -175,6 +175,7 @@ export interface AgentLaunchInvocation {
  */
 interface RunningExecution {
   executionId: string;
+  promise: Promise<AgentExecutionResult>;
   process: ChildProcess;
   startedAt: Date;
   stdout: string;
@@ -714,6 +715,7 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
       // Create running execution entry
       const execution: RunningExecution = {
         executionId,
+        promise,
         process: proc,
         startedAt,
         stdout: '',
@@ -1102,10 +1104,7 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
     const executionId = this.currentExecutionId;
     return {
       executionId,
-      promise: new Promise((resolve, reject) => {
-        execution.resolve = resolve;
-        execution.reject = reject;
-      }),
+      promise: execution.promise,
       interrupt: () => this.interrupt(executionId),
       isRunning: () => this.executions.has(executionId),
     };

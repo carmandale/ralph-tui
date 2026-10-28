@@ -27,11 +27,18 @@ let ends = 0;
 let streamedStdout = '';
 let streamedStderr = '';
 let runningAtStart = false;
+const currentPromises: Promise<unknown>[] = [];
 const handle = agent.execute(process.env.DROID_PROMPT ?? 'test prompt', [], {
   cwd: process.env.DROID_CWD,
   flags: ['--runtime-flag'],
   timeout: mode === 'timeout' ? 100 : 0,
-  onStart: () => { starts++; runningAtStart = handle.isRunning(); },
+  onStart: () => {
+    starts++;
+    runningAtStart = handle.isRunning();
+    if (mode === 'current-handle') {
+      currentPromises.push(agent.getCurrentExecution()!.promise, agent.getCurrentExecution()!.promise);
+    }
+  },
   onEnd: () => { ends++; if (mode === 'throw-on-end') throw new Error('test callback'); },
   onStdout: (text) => {
     streamedStdout += text;
@@ -57,8 +64,10 @@ const handle = agent.execute(process.env.DROID_PROMPT ?? 'test prompt', [], {
 });
 if (mode === 'early-interrupt') handle.interrupt();
 const result = await handle.promise;
+const currentResults = await Promise.all(currentPromises);
 
 console.log(JSON.stringify({ ...result, starts, ends, runningAtStart,
   runningAfterEnd: handle.isRunning(), streamedStdout, streamedStderr,
   currentAfterEnd: agent.getCurrentExecution() !== undefined,
+  currentHandlesMatch: currentResults.every((value) => value === result),
 }));
