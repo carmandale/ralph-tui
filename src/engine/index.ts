@@ -1449,7 +1449,7 @@ export class ExecutionEngine {
       // agents includes tool results (file contents), so a file that merely mentions
       // the signal would otherwise complete the task.
       const completionScanText =
-        this.agent!.extractAgentText?.(agentResult.stdout) ?? agentResult.stdout;
+        this.agent!.extractAgentText?.(agentResult.stdout, { subagentTracing: supportsTracing }) ?? agentResult.stdout;
       const promiseComplete = PROMISE_COMPLETE_PATTERN.test(completionScanText);
 
       // Determine if task was completed

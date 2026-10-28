@@ -140,9 +140,27 @@ for (const { plugin, narrative, ignored } of cases) {
       expect(plugin.extractAgentText(jsonl([narrative(marker)]))).toBe(marker);
     });
 
-    test('preserves plain-text fallback for empty or unrecognized output', () => {
-      for (const stdout of ['', ' \n', marker, '{invalid', 'null', '42']) {
-        expect(plugin.extractAgentText(stdout)).toBeUndefined();
+    test('fails closed on empty, malformed, unrecognized, or truncated structured output', () => {
+      for (const stdout of [
+        '', ' \n', marker, `{invalid ${marker}`, 'null', '42',
+        JSON.stringify({ payload: marker }), JSON.stringify([marker]),
+        `[...agent output truncated in memory...]\n${marker}\"}}`,
+      ]) {
+        expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBe('');
+      }
+    });
+
+    test('retains adjacent narrative after a truncated record without trusting its raw tail', () => {
+      const truncated = `[...agent output truncated in memory...]\n${marker}\"}}`;
+      expect(plugin.extractAgentText(truncated + '\n' + jsonl([
+        narrative('<promise>COM'), narrative('PLETE</promise>'),
+      ]), { subagentTracing: true })).toBe(marker);
+    });
+
+    test('does not join narrative across malformed or unrecognized nonblank records', () => {
+      for (const line of ['log line', '{invalid', 'null', '42', '{}', marker]) {
+        const stdout = [jsonl([narrative('<promise>')]), line, jsonl([narrative('COMPLETE</promise>')])].join('\n');
+        expect(plugin.extractAgentText(stdout, { subagentTracing: true })).not.toMatch(completionPattern);
       }
     });
 
@@ -156,6 +174,35 @@ for (const { plugin, narrative, ignored } of cases) {
     });
   });
 }
+
+describe('explicit plain-text modes', () => {
+  test.each(['text', 'json', 'stream'])('Claude %s mode respects the actual tracing options', async (printMode) => {
+    const plugin = new ClaudeAgentPlugin();
+    await plugin.initialize({ printMode });
+    for (const stdout of [marker, `[...agent output truncated in memory...]\n${marker}`]) {
+      expect(plugin.extractAgentText(stdout)).toBe(printMode === 'text' ? undefined : '');
+      expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBe('');
+    }
+  });
+
+  test.each(['text', 'json'])('Pi %s mode respects the actual tracing options', async (mode) => {
+    const plugin = new PiAgentPlugin();
+    await plugin.initialize({ mode });
+    for (const stdout of [marker, `[...agent output truncated in memory...]\n${marker}`]) {
+      expect(plugin.extractAgentText(stdout)).toBe(mode === 'text' ? undefined : '');
+      expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBe('');
+    }
+  });
+
+  test.each([true, false])('Droid enableTracing=%s respects its effective output mode', async (enableTracing) => {
+    const plugin = new DroidAgentPlugin();
+    await plugin.initialize({ enableTracing });
+    for (const stdout of [marker, `[...agent output truncated in memory...]\n${marker}`]) {
+      expect(plugin.extractAgentText(stdout)).toBeUndefined();
+      expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBe(enableTracing ? '' : undefined);
+    }
+  });
+});
 
 for (const id of ['claude', 'cursor', 'kimi', 'pi']) {
   const plugin = cases.find((item) => item.plugin.meta.id === id)!.plugin;

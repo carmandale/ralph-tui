@@ -42,7 +42,8 @@ describe('completion text extraction', () => {
 
   test('recognizes records with no display events', () => {
     expect(extractAgentTextFromJsonl('{"type":"metadata"}', () => [])).toBe('');
-    expect(extractAgentTextFromJsonl('plain text', () => [])).toBeUndefined();
+    expect(extractAgentTextFromJsonl('plain text', () => [])).toBe('');
+    expect(extractAgentTextFromJsonl('plain text', () => [], undefined, true)).toBeUndefined();
   });
 
   test('separates text across unstructured lines inside JSONL', () => {

@@ -411,7 +411,7 @@ export class PiAgentPlugin extends BaseAgentPlugin {
     return parsePiJsonLine(input);
   }
 
-  extractAgentText(stdout: string): string | undefined {
+  extractAgentText(stdout: string, options?: AgentExecuteOptions): string | undefined {
     return extractAgentTextFromJsonl(stdout, (line) => {
       const parsed = JSON.parse(line) as Record<string, unknown>;
       const message = parsed.message as { role?: unknown } | undefined;
@@ -419,7 +419,7 @@ export class PiAgentPlugin extends BaseAgentPlugin {
         return [{ type: 'tool_result' }];
       }
       return this.parsePiJsonLine(parsed);
-    });
+    }, undefined, this.mode === 'text' && !options?.subagentTracing);
   }
 
   /**

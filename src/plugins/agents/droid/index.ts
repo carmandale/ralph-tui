@@ -142,10 +142,12 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     );
   }
 
-  extractAgentText(stdout: string): string | undefined {
+  extractAgentText(stdout: string, options?: AgentExecuteOptions): string | undefined {
     const parser = createDroidStreamingJsonlParser();
     const results = [...parser.push(stdout), ...parser.flush()];
-    if (!results.some((result) => result.success)) return undefined;
+    if (!results.some((result) => result.success)) {
+      return this.enableTracing && options?.subagentTracing ? '' : undefined;
+    }
 
     const events = results.flatMap((result): AgentDisplayEvent[] => {
       if (!result.success) {

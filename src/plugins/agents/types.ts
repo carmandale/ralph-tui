@@ -371,10 +371,11 @@ export interface AgentPlugin {
 
   /**
    * Extract the agent's own narrative text from raw stdout, excluding tool
-   * results and file contents. Returns undefined when the output is not in
-   * this agent's structured format, so callers can fall back to raw stdout.
+   * results and file contents. Returns undefined only when plain-text output
+   * is allowed for this execution, so callers can fall back to raw stdout.
+   * Structured executions must fail closed even if no record can be parsed.
    */
-  extractAgentText?(stdout: string): string | undefined;
+  extractAgentText?(stdout: string, options?: AgentExecuteOptions): string | undefined;
 
   /**
    * Initialize the plugin with configuration.

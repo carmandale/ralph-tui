@@ -438,14 +438,14 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
     return allEvents;
   }
 
-  extractAgentText(stdout: string): string | undefined {
+  extractAgentText(stdout: string, options?: AgentExecuteOptions): string | undefined {
     return extractAgentTextFromJsonl(stdout, (line) => {
       const event = JSON.parse(line) as Record<string, unknown>;
       if (event.type === 'result' && typeof event.result === 'string') {
         return [{ type: 'system' }, { type: 'text', content: event.result }];
       }
       return this.parseClaudeJsonLine(line);
-    });
+    }, undefined, this.printMode === 'text' && !options?.subagentTracing);
   }
 
   /**

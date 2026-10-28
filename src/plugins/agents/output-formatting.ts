@@ -434,12 +434,14 @@ export function extractAgentTextFromEvents(events: AgentDisplayEvent[]): string 
 /**
  * Recognize JSONL independently of display events so skipped records never
  * fall back to raw stdout. Non-display records also separate narrative groups.
+ * Unrecognized output is only eligible for fallback in explicit text modes.
  */
 export function extractAgentTextFromJsonl(
   stdout: string,
   parseLine: (line: string) => AgentDisplayEvent[],
   isStructured: (record: Record<string, unknown>) => boolean = (record) =>
-    typeof record.type === 'string'
+    typeof record.type === 'string',
+  allowPlainText = false
 ): string | undefined {
   let recognized = false;
   const events: AgentDisplayEvent[] = [];
@@ -460,7 +462,7 @@ export function extractAgentTextFromJsonl(
     }
     events.push({ type: 'system' });
   }
-  return recognized ? extractAgentTextFromEvents(events) : undefined;
+  return recognized || !allowPlainText ? extractAgentTextFromEvents(events) : undefined;
 }
 
 /**

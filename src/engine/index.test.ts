@@ -8,6 +8,9 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { AgentRegistry } from '../plugins/agents/registry.js';
 import { ClaudeAgentPlugin } from '../plugins/agents/builtin/claude.js';
 import { AntigravityAgentPlugin } from '../plugins/agents/builtin/antigravity.js';
@@ -155,6 +158,75 @@ function createExecutionTracker(completeCalls: string[]): TrackerPlugin {
 
 describe('ExecutionEngine', () => {
   describe('completion detection', () => {
+    test.each([
+      { kind: 'tool_use', printMode: 'stream', tracing: false, completed: false },
+      { kind: 'thinking', printMode: 'stream', tracing: false, completed: false },
+      { kind: 'tool_result', printMode: 'json', tracing: false, completed: false },
+      { kind: 'thinking', printMode: 'text', tracing: true, completed: false },
+      { kind: 'plain', printMode: 'text', tracing: false, completed: true },
+      { kind: 'adjacent', printMode: 'stream', tracing: false, completed: true },
+    ])('handles actual capped Claude capture: $kind/$printMode/tracing=$tracing', async ({ kind, printMode, tracing, completed }) => {
+      const directory = await mkdtemp(join(tmpdir(), 'ralph-completion-capture-'));
+      try {
+        const marker = '<promise>COMPLETE</promise>';
+        const payload = 'x'.repeat(2_100_000) + marker;
+        const block = kind === 'tool_use'
+          ? { type: kind, id: 'tool-1', name: 'Read', input: { data: payload } }
+          : kind === 'tool_result'
+            ? { type: kind, tool_use_id: 'tool-1', content: payload }
+            : { type: 'thinking', thinking: payload };
+        const record = JSON.stringify({
+          type: kind === 'tool_result' ? 'user' : 'assistant',
+          message: { content: [block] },
+        });
+        const stdout = kind === 'plain' ? payload : kind === 'adjacent'
+          ? [record, ...['<promise>COM', 'PLETE</promise>'].map((text) => JSON.stringify({
+            type: 'assistant', message: { content: [{ type: 'text', text }] },
+          }))].join('\n') : record;
+        const fixture = join(directory, 'stdout.jsonl');
+        await writeFile(fixture, stdout + '\n');
+        const plugin = new class extends ClaudeAgentPlugin {
+          override readonly meta = { ...new ClaudeAgentPlugin().meta, supportsSubagentTracing: tracing };
+          protected override buildArgs(): string[] {
+            return ['-e', `await Bun.stdin.text(); process.stdout.write(await Bun.file(${JSON.stringify(fixture)}).text())`];
+          }
+        }();
+        await plugin.initialize({ command: process.execPath, printMode, skipPermissions: false });
+        let captured = '';
+        let exitCode: number | undefined;
+        const execute = plugin.execute.bind(plugin);
+        plugin.execute = (...args) => {
+          const handle = execute(...args);
+          return { ...handle, promise: handle.promise.then((result) => {
+            captured = result.stdout;
+            exitCode = result.exitCode;
+            return result;
+          }) };
+        };
+        const completeCalls: string[] = [];
+        const task = createMockTask();
+        const engine = new ExecutionEngine({ ...createMockConfig(), model: undefined, cwd: directory });
+        const internals = engine as unknown as {
+          agent: AgentPlugin;
+          tracker: TrackerPlugin;
+          runIteration: (task: TrackerTask) => Promise<{ taskCompleted: boolean }>;
+        };
+        internals.agent = plugin;
+        internals.tracker = createExecutionTracker(completeCalls);
+
+        const result = await internals.runIteration(task);
+
+        expect(exitCode).toBe(0);
+        expect(captured.length).toBe(2_000_000);
+        expect(captured.startsWith('[...agent output truncated in memory...]\n')).toBe(true);
+        expect(captured).toContain(marker);
+        expect(result.taskCompleted).toBe(completed);
+        expect(completeCalls).toEqual(completed ? [task.id] : []);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
     test.each([
       {
         name: 'thinking-only Claude output does not fall back to raw JSON',
