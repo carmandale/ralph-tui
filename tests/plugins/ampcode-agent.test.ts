@@ -23,6 +23,7 @@ class TestableAmp extends AmpcodeAgentPlugin {
 }
 
 const complete = '<promise>COMPLETE</promise>';
+const completionPattern = /<promise>\s*COMPLETE\s*<\/promise>/i;
 const assistant = (content: unknown[], extra: Record<string, unknown> = {}) => ({
   type: 'assistant', message: { role: 'assistant', content }, ...extra,
 });
@@ -236,6 +237,31 @@ describe('Amp completion and streamed callbacks', () => {
   test('whole assistant messages are not treated as deltas across records', async () => {
     const result = await output(jsonl(assistant([text('<promise>COM')]), assistant([text('PLETE</promise>')])));
     expect(result.stdout).not.toContain(complete);
+  });
+
+  test.each([
+    ['<promise>', 'COMPLETE</promise>'],
+    ['<promise>COMPLETE', '</promise>'],
+    ['<promise>COM', 'PLETE</promise>'],
+  ])('engine matcher cannot cross boundaries between %s and %s', async (left, right) => {
+    for (const boundary of [
+      { type: 'tool_use', id: 'tool-1', name: 'Read', input: {} },
+      { type: 'thinking', thinking: 'hidden' }, { type: 'redacted_thinking', data: 'hidden' },
+      null, 'invalid', [], { type: 'text', text: 12 },
+    ]) {
+      const result = await output(jsonl(assistant([text(left), boundary, text(right)])));
+      expect(completionPattern.test(result.stdout)).toBe(false);
+    }
+    for (const middle of [
+      '', jsonl({ type: 'tool_result', content: 'tool output' }),
+      jsonl({ type: 'system', subtype: 'init' }), jsonl(assistant([{ type: 'thinking', thinking: 'hidden' }])),
+      'malformed JSONL',
+    ]) {
+      const result = await output([jsonl(assistant([text(left)])), middle, jsonl(assistant([text(right)]))].join('\n'));
+      expect(completionPattern.test(result.stdout)).toBe(false);
+    }
+    const adjacent = await output(jsonl(assistant([text(left), text(right)])));
+    expect(completionPattern.test(adjacent.stdout)).toBe(true);
   });
 
   test('flushes a split final line to raw callbacks, display segments and onEnd exactly once', async () => {

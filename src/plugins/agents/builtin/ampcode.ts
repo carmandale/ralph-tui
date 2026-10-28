@@ -18,6 +18,9 @@ import type {
   AgentExecutionHandle,
 } from '../types.js';
 
+// Completion regexes accept whitespace inside tags, so boundaries must not be whitespace.
+const COMPLETION_BOUNDARY = '\0';
+
 /**
  * Represents a parsed JSONL message from Ampcode output.
  * Ampcode emits Claude Code-compatible stream JSON format.
@@ -292,7 +295,7 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
           result.error = AmpcodeAgentPlugin.errorMessage(failure.raw);
         }
         result.stdout = result.status === 'completed'
-          ? parsed.messages.map(({ raw }) => AmpcodeAgentPlugin.completionText(raw)).join('\n')
+          ? parsed.messages.map(({ raw }) => AmpcodeAgentPlugin.completionText(raw)).join(COMPLETION_BOUNDARY)
           : '';
         try {
           emit(parser.flush());
@@ -316,7 +319,7 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
     if (raw.parent_tool_use_id) return '';
     if (raw.type === 'assistant') {
       return AmpcodeAgentPlugin.contentBlocks(raw)
-        .map((block) => block.type === 'text' && typeof block.text === 'string' ? block.text : '\n')
+        .map((block) => block.type === 'text' && typeof block.text === 'string' ? block.text : COMPLETION_BOUNDARY)
         .join('');
     }
     if (raw.type === 'result' && raw.is_error !== true && raw.subtype === 'success' && typeof raw.result === 'string') {
