@@ -558,6 +558,20 @@ describe('RalphLinearClient', () => {
         expect((err as LinearApiError).kind).toBe('not_found');
       }
     });
+
+    for (const [message, kind] of [
+      ['Internal server error', 'unknown'],
+      ['Unauthorized', 'auth'],
+      ['Rate limit exceeded', 'rate_limit'],
+      ['Network request failed', 'network'],
+      ['Entity not found', 'not_found'],
+    ]) {
+      test(`preserves ${kind} snapshot request failures`, async () => {
+        mockSdkResponses.request = () => { throw new Error(message); };
+
+        await expect(createClient().getIssueSnapshot('ENG-10')).rejects.toMatchObject({ kind });
+      });
+    }
   });
 
   describe('getChildIssueSnapshots', () => {

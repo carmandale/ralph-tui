@@ -747,6 +747,15 @@ describe('LinearTrackerPlugin', () => {
 
       expect(task).toBeUndefined();
     });
+
+    test('propagates unknown snapshot failures instead of returning a missing task', async () => {
+      const plugin = await createInitializedPlugin();
+      const { LinearApiError: MockLinearApiError } = await import('./client.js');
+      const error = new MockLinearApiError('Internal server error', 'unknown');
+      mockResponses.getIssue = () => { throw error; };
+
+      await expect(plugin.getTask('ENG-10')).rejects.toBe(error);
+    });
   });
 
   describe('sync', () => {

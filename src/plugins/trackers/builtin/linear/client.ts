@@ -435,15 +435,7 @@ export class RalphLinearClient {
         { id: string }
       >(ISSUE_SNAPSHOT_QUERY, { id: idOrKey });
     } catch (err) {
-      const classified = classifyError(err);
-      if (classified.kind === 'unknown') {
-        throw new LinearApiError(
-          `Issue "${idOrKey}" not found or inaccessible.`,
-          'not_found',
-          err,
-        );
-      }
-      throw classified;
+      throw classifyError(err);
     }
 
     if (!data.issue) {
