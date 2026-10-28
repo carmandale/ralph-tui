@@ -1239,7 +1239,7 @@ Options:
   --poll <seconds>    Poll interval in seconds (implies --watch, default: 30)
   --cwd <path>        Working directory
   --resume            Resume existing session
-  --reset-progress    Clear .ralph-tui/progress.md instead of preserving it
+  --reset-progress    Clear the configured progress file instead of preserving it
   --force             Force start even if locked
   --headless          Run without TUI (alias: --no-tui)
   --no-tui            Run without TUI, output structured logs to stdout
