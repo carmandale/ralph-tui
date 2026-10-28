@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { AgentRegistry } from '../plugins/agents/registry.js';
 import { ClaudeAgentPlugin } from '../plugins/agents/builtin/claude.js';
 import { AntigravityAgentPlugin } from '../plugins/agents/builtin/antigravity.js';
+import { DroidAgentPlugin } from '../plugins/agents/droid/index.js';
 import type { AgentPlugin } from '../plugins/agents/types.js';
 import type { TrackerPlugin, TrackerTask, TaskFilter } from '../plugins/trackers/types.js';
 import type { RalphConfig } from '../config/types.js';
@@ -158,6 +159,44 @@ function createExecutionTracker(completeCalls: string[]): TrackerPlugin {
 
 describe('ExecutionEngine', () => {
   describe('completion detection', () => {
+    test.each(['empty', 'malformed', 'unknown', 'narrative'])(
+      'honors configured Droid structured flags in the engine: %s', async (kind) => {
+        const marker = '<promise>COMPLETE</promise>';
+        const stdout = kind === 'empty' ? '' : kind === 'malformed' ? `not-json ${marker}`
+          : JSON.stringify(kind === 'narrative'
+            ? { type: 'message', role: 'assistant', text: marker }
+            : { futureAgentField: marker });
+        const plugin = new DroidAgentPlugin();
+        await plugin.initialize({ defaultFlags: ['--output-format', 'stream-json'], enableTracing: false });
+        expect(plugin.meta.supportsSubagentTracing).toBe(false);
+        const completeCalls: string[] = [];
+        const task = createMockTask();
+        const engine = new ExecutionEngine(createMockConfig());
+        const internals = engine as unknown as {
+          agent: AgentPlugin;
+          tracker: TrackerPlugin;
+          runIteration: (task: TrackerTask) => Promise<{ taskCompleted: boolean }>;
+        };
+        let executedFlags: string[] | undefined;
+        let extractedFlags: string[] | undefined;
+        const agent = createMockAgent(stdout, (output, options) => {
+          extractedFlags = options?.flags;
+          return plugin.extractAgentText(output, options);
+        });
+        const execute = agent.execute;
+        agent.execute = (prompt, files, options) => {
+          executedFlags = options?.flags;
+          return execute(prompt, files, options);
+        };
+        internals.agent = agent;
+        internals.tracker = createExecutionTracker(completeCalls);
+        const result = await internals.runIteration(task);
+        expect(extractedFlags).toEqual(executedFlags);
+        expect(result.taskCompleted).toBe(kind === 'narrative');
+        expect(completeCalls).toEqual(kind === 'narrative' ? [task.id] : []);
+      }
+    );
+
     test.each([
       { kind: 'tool_use', printMode: 'stream', tracing: false, completed: false },
       { kind: 'thinking', printMode: 'stream', tracing: false, completed: false },

@@ -14,6 +14,24 @@ export interface DroidCommandArgs {
   enableTracing?: boolean;
 }
 
+export function getDroidOutputFormat(flags: readonly string[]): string | undefined {
+  let format: string | undefined;
+  for (let index = 0; index < flags.length; index++) {
+    const flag = flags[index];
+    if (flag === '--') {
+      break;
+    }
+    if (flag === '--output-format' || flag === '-o') {
+      format = flags[++index] ?? '';
+    } else if (flag.startsWith('--output-format=')) {
+      format = flag.slice('--output-format='.length);
+    } else if (flag.startsWith('-o=')) {
+      format = flag.slice(3);
+    }
+  }
+  return format;
+}
+
 export function buildDroidCommandArgs({
   prompt,
   cwd,

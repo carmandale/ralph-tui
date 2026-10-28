@@ -21,12 +21,12 @@ import type {
   AgentExecutionResult,
   AgentExecutionStatus,
 } from '../types.js';
-import { buildDroidCommandArgs } from './commandBuilder.js';
+import { buildDroidCommandArgs, getDroidOutputFormat } from './commandBuilder.js';
 import { DROID_DEFAULT_COMMAND } from './config.js';
 import { DroidAgentConfigSchema, type DroidReasoningEffort } from './schema.js';
 import { extractAgentTextFromEvents, type AgentDisplayEvent } from '../output-formatting.js';
 import {
-  createDroidStreamingJsonlParser,
+  parseDroidJsonlLine,
   parseDroidCompletionEvents,
 } from './outputParser.js';
 
@@ -135,6 +135,12 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     });
   }
 
+  private buildExecutionArgs(prompt: string, files?: AgentFileContext[], options?: AgentExecuteOptions): string[] {
+    const [subcommand, ...args] = this.buildArgs(prompt, files, options);
+    // Droid requires the exec subcommand before configured and per-execution flags.
+    return [subcommand, ...this.defaultFlags, ...(options?.flags ?? []), ...args];
+  }
+
   /**
    * Get Droid-specific suggestions for preflight failures.
    * Provides actionable guidance for common configuration issues.
@@ -150,9 +156,9 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
   }
 
   extractAgentText(stdout: string, options?: AgentExecuteOptions): string | undefined {
-    const parser = createDroidStreamingJsonlParser();
-    const results = [...parser.push(stdout), ...parser.flush()];
-    const structured = this.enableTracing && options?.subagentTracing === true;
+    const results = stdout.split('\n').map((raw) => ({ raw, ...parseDroidJsonlLine(raw) }));
+    const format = getDroidOutputFormat(this.buildExecutionArgs('', undefined, options).slice(1, -1));
+    const structured = format !== undefined && format !== 'text';
     const hasProtocolEnvelope = results.some((result) => result.success &&
       DROID_PROTOCOL_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(result.message.raw, field)));
     if (!structured && !hasProtocolEnvelope) {
@@ -161,9 +167,9 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
 
     const events = results.flatMap((result): AgentDisplayEvent[] => {
       if (!result.success) {
-        return result.raw.trim() ? [{ type: 'system' }] : [];
+        return result.error === 'Empty line' ? [] : [{ type: 'system' }];
       }
-      return parseDroidCompletionEvents(result.message);
+      return parseDroidCompletionEvents(result.message, result.raw);
     });
     return extractAgentTextFromEvents(events);
   }
@@ -180,7 +186,7 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
   ) {
     const executionId = randomUUID();
     const command = this.commandPath ?? this.meta.defaultCommand;
-    const args = this.buildArgs(prompt, files, options);
+    const allArgs = this.buildExecutionArgs(prompt, files, options);
     const startedAt = new Date();
     const timeout = options?.timeout ?? this.defaultTimeout;
 
@@ -195,11 +201,6 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
       // Disable Ink's input handling entirely
       INK_DISABLE_INPUT: '1',
     };
-
-    // IMPORTANT: args[0] is 'exec' subcommand which MUST come first after 'droid'.
-    // options.flags (like --model) must come AFTER the subcommand.
-    const [subcommand, ...restArgs] = args;
-    const allArgs = [subcommand, ...this.defaultFlags, ...(options?.flags ?? []), ...restArgs];
 
     let resolvePromise: (result: AgentExecutionResult) => void;
     const promise = new Promise<AgentExecutionResult>((resolve) => {

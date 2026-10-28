@@ -150,6 +150,88 @@ describe('parseDroidJsonlLine', () => {
 describe('DroidAgentPlugin.extractAgentText', () => {
   const marker = '<promise>COMPLETE</promise>';
 
+  test('honors declared structured formats independently of tracing', async () => {
+    for (const flags of [
+      ['--output-format', 'stream-json'], ['--output-format=stream-json'],
+      ['-o', 'stream-json'], ['-o=stream-json'],
+      ['--output-format', 'json'], ['-o', 'json'], ['--output-format=stream-jsonrpc'],
+    ]) {
+      const plugin = new DroidAgentPlugin();
+      await plugin.initialize({ defaultFlags: flags, enableTracing: false });
+      const perCall = new DroidAgentPlugin();
+      for (const stdout of [
+        '', marker, `not-json ${marker}`, `{"futureAgentField":"${marker}"}`,
+        `{"summary":"incidental"}\n${marker}`,
+      ]) {
+        expect(plugin.extractAgentText(stdout, { subagentTracing: false })).toBe('');
+        expect(perCall.extractAgentText(stdout, { flags, subagentTracing: false })).toBe('');
+      }
+      const narrative = JSON.stringify({ type: 'message', role: 'assistant', text: marker });
+      expect(plugin.extractAgentText(narrative, { subagentTracing: false })).toBe(marker);
+      expect(perCall.extractAgentText(narrative, { flags, subagentTracing: false })).toBe(marker);
+    }
+  });
+
+  test('uses the last format in actual argument order, including implicit tracing output', async () => {
+    const stdout = `{"summary":"incidental"}\n${marker}`;
+    for (const flags of [['--output-format', 'text'], ['--output-format=text'], ['-o', 'text'], []]) {
+      const plugin = new DroidAgentPlugin();
+      await plugin.initialize({ defaultFlags: flags, enableTracing: false });
+      expect(plugin.extractAgentText(stdout, { subagentTracing: false })).toBeUndefined();
+    }
+    const plugin = new DroidAgentPlugin();
+    await plugin.initialize({ defaultFlags: ['--output-format', 'stream-json'] });
+    expect(plugin.extractAgentText(stdout, { flags: ['--output-format', 'text'] })).toBeUndefined();
+    expect(plugin.extractAgentText(stdout, { flags: ['-o', 'text'], subagentTracing: true })).toBe('');
+    const plaintext = new DroidAgentPlugin();
+    await plaintext.initialize({ defaultFlags: ['-o', 'text'] });
+    expect(plaintext.extractAgentText(stdout, { flags: ['--output-format=json'] })).toBe('');
+  });
+
+  test('does not accept malformed primary discriminators or explicit camel-case error results', () => {
+    const plugin = new DroidAgentPlugin();
+    for (const record of [
+      { type: null, event: 'message', text: marker },
+      { type: [], event: 'message', text: marker },
+      { type: {}, event: 'message', text: marker },
+      { type: '', event: 'message', text: marker },
+      { event: null, kind: 'message', text: marker },
+      { type: 'result', isError: true, result: marker },
+    ]) {
+      expect(plugin.extractAgentText(JSON.stringify(record), { subagentTracing: true })).toBe('');
+      const split = [
+        { type: 'message', text: '<promise>' }, record,
+        { type: 'message', text: 'COMPLETE</promise>' },
+      ].map((value) => JSON.stringify(value)).join('\n');
+      expect(plugin.extractAgentText(split, { subagentTracing: true })).not.toMatch(/<promise>\s*COMPLETE\s*<\/promise>/);
+    }
+    expect(plugin.extractAgentText(JSON.stringify({ event: 'message', text: marker }))).toBe(marker);
+    expect(plugin.extractAgentText(JSON.stringify({ type: 'result', isError: false, result: marker }))).toBe(marker);
+  });
+
+  test('requires strict completion framing but preserves ANSI/PTY whitespace and display salvage', () => {
+    const plugin = new DroidAgentPlugin();
+    const record = JSON.stringify({ type: 'message', text: marker });
+    for (const prefix of ['garbage:', 'tool output: ', '[Output truncated] ']) {
+      const line = prefix + record;
+      expect(parseDroidJsonlLine(line).success).toBe(true);
+      expect(plugin.extractAgentText(line, { subagentTracing: true })).toBe('');
+      expect(plugin.extractAgentText(line)).toBe('');
+    }
+    expect(plugin.extractAgentText(`\u001b[32m${record}\u001b[0m\r\n`, { subagentTracing: true })).toBe(marker);
+    expect(plugin.extractAgentText(` \t${record}\r\n`, { subagentTracing: true })).toBe(marker);
+    expect(plugin.extractAgentText([
+      JSON.stringify({ type: 'message', text: '<promise>' }), '\u001b[0m',
+      JSON.stringify({ type: 'message', text: 'COMPLETE</promise>' }),
+    ].join('\n'), { subagentTracing: true })).toBe(marker);
+    const split = [
+      JSON.stringify({ type: 'message', text: '<promise>' }),
+      'tool output: ' + JSON.stringify({ type: 'message', text: 'ignored' }),
+      JSON.stringify({ type: 'message', text: 'COMPLETE</promise>' }),
+    ].join('\n');
+    expect(plugin.extractAgentText(split, { subagentTracing: true })).not.toMatch(/<promise>\s*COMPLETE\s*<\/promise>/);
+  });
+
   test('allows incidental non-protocol JSON in untraced plaintext only', async () => {
     const plugin = new DroidAgentPlugin();
     const disabled = new DroidAgentPlugin();

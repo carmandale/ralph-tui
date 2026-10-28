@@ -585,15 +585,22 @@ export function parseDroidMessageToEvents(message: DroidJsonlMessage): AgentDisp
 }
 
 /** Extract completion narrative without the display parser's permissive flattening. */
-export function parseDroidCompletionEvents(message: DroidJsonlMessage): AgentDisplayEvent[] {
+export function parseDroidCompletionEvents(message: DroidJsonlMessage, line: string): AgentDisplayEvent[] {
   const { raw } = message;
-  const type = message.type?.toLowerCase();
+  const discriminator = ['type', 'event', 'kind'].find((key) => Object.prototype.hasOwnProperty.call(raw, key));
+  const value = discriminator ? raw[discriminator] : undefined;
+  const type = typeof value === 'string' ? value.toLowerCase() : undefined;
   const role = typeof raw.role === 'string' ? raw.role.toLowerCase() : raw.role;
   const boundary: AgentDisplayEvent = { type: 'system' };
+  try {
+    JSON.parse(stripAnsi(line).trim());
+  } catch {
+    return [boundary];
+  }
   if (
     !['message', 'completion', 'result'].includes(type ?? '') ||
     (role !== undefined && role !== 'assistant') ||
-    raw.is_error === true || raw.error || raw.error_message || raw.errorMessage ||
+    raw.is_error === true || raw.isError === true || raw.error || raw.error_message || raw.errorMessage ||
     raw.status === 'error' || raw.status === 'failed' ||
     (typeof raw.subtype === 'string' && raw.subtype.startsWith('error_'))
   ) {
