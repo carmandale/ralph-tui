@@ -78,7 +78,9 @@ The `--epic` flag is required for the Linear tracker in MVP. It accepts either a
 
 ### API Usage
 
-Ralph fetches child issues together with their state, labels, assignee, and blocking relations in a single GraphQL query (one request per 50 children), keeping usage well within Linear's hourly rate limit even for large PRDs. Child issues are cached for 5 seconds so repeated reads within an iteration share one request; the cache is cleared whenever Ralph updates or completes an issue. Edits made directly in Linear are picked up within a few seconds.
+Ralph fetches child issues together with their state, labels, assignee, and blocking relations in a single GraphQL query (one request per 50 children). Issues with more than 20 labels or 25 inverse relations require additional paginated requests so label filters and dependencies remain complete. This reduces API usage compared with resolving each issue's fields separately; Linear's request and complexity limits still apply.
+
+Concurrent child reads share one in-flight fetch. Successful results are cached for 5 seconds after the fetch completes; failed requests are not cached. The cache is cleared whenever Ralph updates or completes an issue or changes the epic. Reads invalidated while in flight retry against the fresh cache instead of returning pre-write data. Edits made directly in Linear appear on the next fetch after the cache expires.
 
 ### Status Mapping
 

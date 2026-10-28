@@ -120,7 +120,7 @@ function linearIssueToTask(
     status,
     priority: clampPriority(ralphPriority),
     description: parsed.description || issue.description || undefined,
-    labels: issue.labels.length > 0 ? issue.labels : undefined,
+    labels: issue.labels.length > 0 ? [...issue.labels] : undefined,
     type: 'task',
     parentId: issue.parentIdentifier ?? undefined,
     dependsOn: blockingIdentifiers.length > 0 ? blockingIdentifiers : undefined,
@@ -170,6 +170,9 @@ export class LinearTrackerPlugin extends BaseTrackerPlugin {
 
   override async initialize(config: Record<string, unknown>): Promise<void> {
     await super.initialize(config);
+    this.invalidateChildCache();
+    this.workflowStatesCache = null;
+    this.teamId = '';
 
     if (typeof config.epicId === 'string' && config.epicId) {
       this.epicId = config.epicId;
@@ -225,15 +228,23 @@ export class LinearTrackerPlugin extends BaseTrackerPlugin {
       return cached.snapshots;
     }
 
-    const snapshots = this.client.getChildIssueSnapshots(parentId);
-    this.childCache.set(parentId, { expiresAt: now + CHILD_CACHE_TTL_MS, snapshots });
-    // Don't cache failures
-    snapshots.catch(() => {
-      if (this.childCache.get(parentId)?.snapshots === snapshots) {
-        this.childCache.delete(parentId);
-      }
-    });
-    return snapshots;
+    const entry: { expiresAt: number; snapshots: Promise<LinearIssueSnapshot[]> } = {
+      expiresAt: Infinity,
+      snapshots: this.client.getChildIssueSnapshots(parentId).then((children) => {
+        if (this.childCache.get(parentId) !== entry) {
+          return this.getChildSnapshots(parentId);
+        }
+        entry.expiresAt = Date.now() + CHILD_CACHE_TTL_MS;
+        return children;
+      }).catch((err: unknown) => {
+        if (this.childCache.get(parentId) === entry) {
+          this.childCache.delete(parentId);
+        }
+        throw err;
+      }),
+    };
+    this.childCache.set(parentId, entry);
+    return entry.snapshots;
   }
 
   /**

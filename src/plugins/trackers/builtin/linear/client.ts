@@ -122,8 +122,8 @@ const ISSUE_SNAPSHOT_FIELDS = `
   team { id }
   parent { identifier }
   assignee { name displayName }
-  labels(first: 20) { nodes { name } }
-  inverseRelations(first: 25) { nodes { type issue { id } } pageInfo { hasNextPage } }
+  labels(first: 20) { nodes { name } pageInfo { hasNextPage endCursor } }
+  inverseRelations(first: 25) { nodes { type issue { id } } pageInfo { hasNextPage endCursor } }
 `;
 
 const ISSUE_SNAPSHOT_QUERY = `
@@ -158,7 +158,23 @@ const INVERSE_RELATIONS_QUERY = `
   }
 `;
 
+const LABELS_QUERY = `
+  query RalphIssueLabels($id: String!, $after: String) {
+    issue(id: $id) {
+      labels(first: 100, after: $after) {
+        nodes { name }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+`;
+
 type RawRelation = { type: string; issue?: { id: string } | null };
+
+interface SnapshotConnection<T> {
+  nodes: T[];
+  pageInfo: { hasNextPage: boolean; endCursor?: string | null };
+}
 
 /** Raw GraphQL shape of an issue returned by the snapshot queries. */
 interface RawIssueSnapshot {
@@ -173,11 +189,8 @@ interface RawIssueSnapshot {
   team?: { id: string } | null;
   parent?: { identifier: string } | null;
   assignee?: { name: string; displayName?: string | null } | null;
-  labels?: { nodes: Array<{ name: string }> } | null;
-  inverseRelations?: {
-    nodes: RawRelation[];
-    pageInfo?: { hasNextPage: boolean } | null;
-  } | null;
+  labels?: SnapshotConnection<{ name: string }> | null;
+  inverseRelations?: SnapshotConnection<RawRelation> | null;
 }
 
 /** IDs of the issues that block an issue, given its inverse relations. */
@@ -194,16 +207,20 @@ function blockerIds(relations: RawRelation[]): string[] {
  */
 function nextPageCursor(
   pageInfo: { hasNextPage: boolean; endCursor?: string | null },
-  previous: string | undefined,
+  seen: Set<string>,
   description: string,
 ): string | undefined {
-  const next = pageInfo.hasNextPage && pageInfo.endCursor ? pageInfo.endCursor : undefined;
-  if (next && next === previous) {
+  if (!pageInfo.hasNextPage) {
+    return undefined;
+  }
+  const next = pageInfo.endCursor;
+  if (!next || seen.has(next)) {
     throw new LinearApiError(
-      `Linear returned a repeated pagination cursor for ${description}.`,
+      `Linear returned a missing or repeated pagination cursor for ${description}.`,
       'unknown',
     );
   }
+  seen.add(next);
   return next;
 }
 
@@ -456,6 +473,7 @@ export class RalphLinearClient {
     try {
       const snapshots: LinearIssueSnapshot[] = [];
       let after: string | undefined;
+      const seen = new Set<string>();
 
       do {
         const data: ChildrenData = await this.client.client.request<
@@ -472,7 +490,7 @@ export class RalphLinearClient {
 
         const { nodes, pageInfo } = data.issue.children;
         snapshots.push(...(await Promise.all(nodes.map((node) => this.completeSnapshot(node)))));
-        after = nextPageCursor(pageInfo, after, `children of "${parentId}"`);
+        after = nextPageCursor(pageInfo, seen, `children of "${parentId}"`);
       } while (after);
 
       return snapshots;
@@ -482,40 +500,49 @@ export class RalphLinearClient {
   }
 
   /**
-   * Convert a raw issue to a snapshot, fetching the rest of its inverse
-   * relations when the snapshot query returned only the first page.
+   * Convert a raw issue to a snapshot, completing truncated nested connections.
    */
   private async completeSnapshot(raw: RawIssueSnapshot): Promise<LinearIssueSnapshot> {
     const snapshot = toIssueSnapshot(raw);
+    if (raw.labels?.pageInfo?.hasNextPage) {
+      const labels = await this.completeConnection(raw.id, 'labels', LABELS_QUERY, raw.labels);
+      snapshot.labels = labels.map((label) => label.name);
+    }
     if (raw.inverseRelations?.pageInfo?.hasNextPage) {
-      snapshot.blockedByIds = await this.getAllBlockerIds(raw.id);
+      const relations = await this.completeConnection(
+        raw.id, 'inverseRelations', INVERSE_RELATIONS_QUERY, raw.inverseRelations,
+      );
+      snapshot.blockedByIds = blockerIds(relations);
     }
     return snapshot;
   }
 
   /**
-   * Get the IDs of every issue that blocks the given issue, across all pages
-   * of its inverse relations.
+   * Continue a nested connection from the cursor returned by the snapshot.
    */
-  private async getAllBlockerIds(issueId: string): Promise<string[]> {
-    type RelationsData = {
+  private async completeConnection<T>(
+    issueId: string,
+    field: 'labels' | 'inverseRelations',
+    query: string,
+    initial: SnapshotConnection<T>,
+  ): Promise<T[]> {
+    type ConnectionData = {
       issue?: {
-        inverseRelations: {
-          nodes: RawRelation[];
-          pageInfo: { hasNextPage: boolean; endCursor?: string | null };
-        };
+        [key in typeof field]: SnapshotConnection<T>;
       } | null;
     };
 
     try {
-      const ids: string[] = [];
-      let after: string | undefined;
+      const nodes = [...initial.nodes];
+      const seen = new Set<string>();
+      let pageInfo = initial.pageInfo;
+      let after = nextPageCursor(pageInfo, seen, `${field} of "${issueId}"`);
 
-      do {
-        const data: RelationsData = await this.client.client.request<
-          RelationsData,
+      while (after) {
+        const data: ConnectionData = await this.client.client.request<
+          ConnectionData,
           { id: string; after?: string }
-        >(INVERSE_RELATIONS_QUERY, { id: issueId, after });
+        >(query, { id: issueId, after });
 
         if (!data.issue) {
           throw new LinearApiError(
@@ -524,12 +551,13 @@ export class RalphLinearClient {
           );
         }
 
-        const { nodes, pageInfo } = data.issue.inverseRelations;
-        ids.push(...blockerIds(nodes));
-        after = nextPageCursor(pageInfo, after, `relations of "${issueId}"`);
-      } while (after);
+        const connection = data.issue[field];
+        nodes.push(...connection.nodes);
+        pageInfo = connection.pageInfo;
+        after = nextPageCursor(pageInfo, seen, `${field} of "${issueId}"`);
+      }
 
-      return ids;
+      return nodes;
     } catch (err) {
       throw classifyError(err);
     }

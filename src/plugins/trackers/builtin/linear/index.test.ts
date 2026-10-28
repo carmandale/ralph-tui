@@ -4,7 +4,7 @@
  * completion comment behavior, parent ID resolution, and client error handling.
  */
 
-import { describe, expect, test, beforeAll, beforeEach, mock } from 'bun:test';
+import { describe, expect, test, beforeAll, beforeEach, mock, spyOn } from 'bun:test';
 
 // --- Mock the Linear client module before any imports that use it ---
 
@@ -20,7 +20,7 @@ let mockCalls: {
 /** Configurable mock responses */
 let mockResponses: {
   getIssue: (idOrKey: string) => unknown;
-  getChildIssues: (parentId: string) => unknown[];
+  getChildIssues: (parentId: string) => unknown[] | Promise<unknown[]>;
   getWorkflowStates: (teamId: string) => unknown[];
   getBlockingIssueIds: (issueId: string) => string[];
 };
@@ -146,7 +146,7 @@ beforeAll(() => {
         getChildIssueSnapshots: async (parentId: string) => {
           mockCalls.getChildIssueSnapshots.push({ parentId });
           return Promise.all(
-            (mockResponses.getChildIssues(parentId) as MockIssue[]).map(toMockSnapshot),
+            ((await mockResponses.getChildIssues(parentId)) as MockIssue[]).map(toMockSnapshot),
           );
         },
         getWorkflowStates: async (teamId: string) => {
@@ -484,6 +484,25 @@ describe('LinearTrackerPlugin', () => {
   });
 
   describe('next-task ordering by ralphPriority', () => {
+    test('does not select a task while its sibling blocker is unresolved', async () => {
+      let blockerState = 'unstarted';
+      mockResponses.getChildIssues = () => [
+        createMockIssue({
+          id: 'uuid-dependent', identifier: 'ENG-11', title: 'Dependent',
+          description: buildStoryIssueBody({
+            storyId: 'US-002', ralphPriority: 1, description: 'Blocked', acceptanceCriteria: [],
+          }),
+        }),
+        createMockIssue({ id: 'uuid-blocker', identifier: 'ENG-12', title: 'Blocker', stateType: blockerState }),
+      ];
+      mockResponses.getBlockingIssueIds = (id) => id === 'uuid-dependent' ? ['uuid-blocker'] : [];
+      const plugin = await createInitializedPlugin();
+      expect((await plugin.getNextTask())?.id).toBe('ENG-12');
+      blockerState = 'completed';
+      await plugin.completeTask('ENG-12');
+      expect((await plugin.getNextTask())?.id).toBe('ENG-11');
+    });
+
     test('returns task with lowest ralphPriority first', async () => {
       const body1 = buildStoryIssueBody({
         storyId: 'US-001', ralphPriority: 5,
@@ -874,6 +893,16 @@ describe('LinearTrackerPlugin', () => {
   });
 
   describe('API request budget', () => {
+    function deferredChildren() {
+      let resolve!: (issues: MockIssue[]) => void;
+      let reject!: (err: Error) => void;
+      const promise = new Promise<MockIssue[]>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+      });
+      return { promise, resolve, reject };
+    }
+
     function childIssues() {
       return [1, 2, 3].map((n) =>
         createMockIssue({
@@ -907,6 +936,95 @@ describe('LinearTrackerPlugin', () => {
 
       // Initial read, then one refetch after the write
       expect(mockCalls.getChildIssueSnapshots.length).toBe(2);
+    });
+
+    test('slow concurrent reads share a fetch and TTL starts after it completes', async () => {
+      const clock = spyOn(Date, 'now').mockReturnValue(1_000);
+      try {
+        const pending = deferredChildren();
+        mockResponses.getChildIssues = () => pending.promise;
+        const plugin = await createInitializedPlugin();
+        const first = plugin.getTasks();
+        clock.mockReturnValue(10_000);
+        const concurrent = plugin.getNextTask();
+        pending.resolve(childIssues());
+        await Promise.all([first, concurrent]);
+        expect(mockCalls.getChildIssueSnapshots).toHaveLength(1);
+
+        clock.mockReturnValue(14_999);
+        await plugin.getTasks();
+        expect(mockCalls.getChildIssueSnapshots).toHaveLength(1);
+        clock.mockReturnValue(15_000);
+        await plugin.getTasks();
+        expect(mockCalls.getChildIssueSnapshots).toHaveLength(2);
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    test('failed child fetches are retried', async () => {
+      mockResponses.getChildIssues = () => { throw new Error('network failure'); };
+      const plugin = await createInitializedPlugin();
+      await expect(plugin.getTasks()).rejects.toThrow('network failure');
+      mockResponses.getChildIssues = childIssues;
+      expect(await plugin.getTasks()).toHaveLength(3);
+      expect(mockCalls.getChildIssueSnapshots).toHaveLength(2);
+    });
+
+    for (const operation of ['complete', 'update'] as const) {
+      test(`${operation} invalidates a pending read without returning stale children`, async () => {
+        const pending = deferredChildren();
+        mockResponses.getChildIssues = () => pending.promise;
+        const plugin = await createInitializedPlugin();
+        const staleRead = plugin.getTasks();
+        const fresh = childIssues().slice(1);
+        mockResponses.getChildIssues = () => fresh;
+
+        const result = operation === 'complete'
+          ? await plugin.completeTask('ENG-11')
+          : await plugin.updateTaskStatus('ENG-11', 'in_progress');
+        if (operation === 'complete') expect(result).toMatchObject({ success: true });
+        else expect(result).toMatchObject({ id: 'ENG-11' });
+        pending.resolve(childIssues());
+        expect((await staleRead).map((task) => task.id)).toEqual(['ENG-12', 'ENG-13']);
+        expect(await plugin.getTasks()).toHaveLength(2);
+        expect(mockCalls.getChildIssueSnapshots).toHaveLength(2);
+      });
+    }
+
+    test('a stale rejection cannot evict a post-write cache entry', async () => {
+      const pending = deferredChildren();
+      mockResponses.getChildIssues = () => pending.promise;
+      const plugin = await createInitializedPlugin();
+      const staleRead = plugin.getTasks().catch((err: unknown) => err);
+      mockResponses.getChildIssues = childIssues;
+      await plugin.completeTask('ENG-11');
+      pending.reject(new Error('old failure'));
+      expect(await staleRead).toMatchObject({ message: 'old failure' });
+      await plugin.getTasks();
+      expect(mockCalls.getChildIssueSnapshots).toHaveLength(2);
+    });
+
+    test('epic changes invalidate children and cache keys separate explicit parents', async () => {
+      mockResponses.getChildIssues = childIssues;
+      const plugin = await createInitializedPlugin();
+      await plugin.getTasks();
+      await plugin.getTasks({ parentId: 'ENG-99' });
+      await plugin.getTasks();
+      expect(mockCalls.getChildIssueSnapshots.map((call) => call.parentId)).toEqual(['ENG-1', 'ENG-99']);
+      plugin.setEpicId('ENG-99');
+      await plugin.getTasks();
+      expect(mockCalls.getChildIssueSnapshots.map((call) => call.parentId)).toEqual(['ENG-1', 'ENG-99', 'ENG-99']);
+    });
+
+    test('returned labels cannot mutate cached snapshots or later filters', async () => {
+      mockResponses.getChildIssues = () => [createMockIssue({
+        id: 'uuid-11', identifier: 'ENG-11', title: 'Labelled task', labels: ['filter-me'],
+      })];
+      const plugin = await createInitializedPlugin();
+      const [task] = await plugin.getTasks();
+      task.labels!.pop();
+      expect(await plugin.getTasks({ labels: ['filter-me'] })).toHaveLength(1);
     });
   });
 });

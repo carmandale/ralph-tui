@@ -461,15 +461,15 @@ describe('RalphLinearClient', () => {
             issue: {
               ...rawIssue,
               inverseRelations: {
-                nodes: [{ type: 'related', issue: { id: 'uuid-related' } }],
-                pageInfo: { hasNextPage: true },
+                nodes: [{ type: 'blocks', issue: { id: 'uuid-first-blocker' } }],
+                pageInfo: { hasNextPage: true, endCursor: 'initial' },
               },
             },
           };
         }
         return {
           issue: {
-            inverseRelations: variables.after
+            inverseRelations: variables.after === 'r1'
               ? {
                   nodes: [{ type: 'blocks', issue: { id: 'uuid-blocker-2' } }],
                   pageInfo: { hasNextPage: false, endCursor: null },
@@ -488,11 +488,50 @@ describe('RalphLinearClient', () => {
       const client = createClient();
       const snapshot = await client.getIssueSnapshot('ENG-10');
 
-      expect(snapshot.blockedByIds).toEqual(['uuid-blocker-1', 'uuid-blocker-2']);
+      expect(snapshot.blockedByIds).toEqual(['uuid-first-blocker', 'uuid-blocker-1', 'uuid-blocker-2']);
       expect(mockSdkCalls.request.length).toBe(3);
-      expect(mockSdkCalls.request[1].variables).toEqual({ id: 'uuid-10', after: undefined });
+      expect(mockSdkCalls.request[1].variables).toEqual({ id: 'uuid-10', after: 'initial' });
       expect(mockSdkCalls.request[2].variables).toEqual({ id: 'uuid-10', after: 'r1' });
     });
+
+    test('fetches every label without repeating the initial page', async () => {
+      mockSdkResponses.request = (query, variables) => {
+        if (!query.includes('RalphIssueLabels')) {
+          expect(query).toContain('labels(first: 20) { nodes { name } pageInfo { hasNextPage endCursor } }');
+          return { issue: { ...rawIssue, labels: {
+            nodes: Array.from({ length: 20 }, (_, n) => ({ name: `label-${n}` })),
+            pageInfo: { hasNextPage: true, endCursor: 'l1' },
+          } } };
+        }
+        return { issue: { labels: {
+          nodes: [{ name: variables.after === 'l1' ? 'label-20' : 'filter-me' }],
+          pageInfo: { hasNextPage: variables.after === 'l1', endCursor: 'l2' },
+        } } };
+      };
+
+      const snapshot = await createClient().getIssueSnapshot('ENG-10');
+      expect(snapshot.labels).toHaveLength(22);
+      expect(snapshot.labels.slice(-2)).toEqual(['label-20', 'filter-me']);
+      expect(mockSdkCalls.request.slice(1).map((call) => call.variables)).toEqual([
+        { id: 'uuid-10', after: 'l1' }, { id: 'uuid-10', after: 'l2' },
+      ]);
+    });
+
+    for (const field of ['labels', 'inverseRelations'] as const) {
+      test(`rejects missing and cyclic ${field} pagination cursors`, async () => {
+        for (const cursor of [null, 'initial']) {
+          mockSdkCalls.request = [];
+          mockSdkResponses.request = (query) => ({ issue: query.includes('RalphIssueSnapshot')
+            ? { ...rawIssue, [field]: {
+                nodes: [], pageInfo: { hasNextPage: true, endCursor: 'initial' },
+              } }
+            : { [field]: { nodes: [], pageInfo: { hasNextPage: true, endCursor: cursor } } },
+          });
+          await expect(createClient().getIssueSnapshot('ENG-10')).rejects.toThrow('pagination cursor');
+          expect(mockSdkCalls.request).toHaveLength(2);
+        }
+      });
+    }
 
     test('makes no follow-up request when relations fit on one page', async () => {
       mockSdkResponses.request = () => ({
@@ -570,6 +609,45 @@ describe('RalphLinearClient', () => {
         expect((err as LinearApiError).message).toContain('repeated pagination cursor');
       }
       expect(mockSdkCalls.request.length).toBe(2);
+    });
+
+    test('rejects missing and cyclic child cursors instead of returning incomplete data', async () => {
+      for (const cursors of [[null], ['c1', 'c2', 'c1']]) {
+        let page = 0;
+        mockSdkResponses.request = () => ({ issue: { children: {
+          nodes: [rawChild(++page)],
+          pageInfo: { hasNextPage: true, endCursor: cursors[page - 1] },
+        } } });
+        await expect(createClient().getChildIssueSnapshots('ENG-1')).rejects.toThrow('pagination cursor');
+        expect(page).toBe(cursors.length);
+      }
+    });
+
+    test('completes nested labels and blockers on later child pages', async () => {
+      mockSdkResponses.request = (query, variables) => {
+        if (query.includes('RalphIssueLabels')) {
+          return { issue: { labels: {
+            nodes: [{ name: 'late-label' }], pageInfo: { hasNextPage: false },
+          } } };
+        }
+        if (query.includes('RalphInverseRelations')) {
+          return { issue: { inverseRelations: {
+            nodes: [{ type: 'blocks', issue: { id: 'uuid-1' } }], pageInfo: { hasNextPage: false },
+          } } };
+        }
+        return { issue: { children: variables.after ? {
+          nodes: [{ ...rawChild(2),
+            labels: { nodes: [{ name: 'early-label' }], pageInfo: { hasNextPage: true, endCursor: 'l1' } },
+            inverseRelations: { nodes: [], pageInfo: { hasNextPage: true, endCursor: 'r1' } },
+          }], pageInfo: { hasNextPage: false },
+        } : {
+          nodes: [rawChild(1)], pageInfo: { hasNextPage: true, endCursor: 'c1' },
+        } } };
+      };
+      const children = await createClient().getChildIssueSnapshots('ENG-1');
+      expect(children[1].labels).toEqual(['early-label', 'late-label']);
+      expect(children[1].blockedByIds).toEqual(['uuid-1']);
+      expect(mockSdkCalls.request).toHaveLength(4);
     });
   });
 
