@@ -30,6 +30,13 @@ import {
   parseDroidCompletionEvents,
 } from './outputParser.js';
 
+const DROID_PROTOCOL_FIELDS = [
+  'type', 'event', 'kind', 'role',
+  'tool', 'tool_call', 'toolCall', 'tool_calls', 'toolCalls',
+  'tool_result', 'toolResult', 'tool_results', 'toolResults',
+  'result', 'subtype', 'is_error', 'isError', 'error', 'error_message', 'errorMessage',
+];
+
 export class DroidAgentPlugin extends BaseAgentPlugin {
   private readonly baseMeta: AgentPluginMeta = {
     id: 'droid',
@@ -145,8 +152,11 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
   extractAgentText(stdout: string, options?: AgentExecuteOptions): string | undefined {
     const parser = createDroidStreamingJsonlParser();
     const results = [...parser.push(stdout), ...parser.flush()];
-    if (!results.some((result) => result.success)) {
-      return this.enableTracing && options?.subagentTracing ? '' : undefined;
+    const structured = this.enableTracing && options?.subagentTracing === true;
+    const hasProtocolEnvelope = results.some((result) => result.success &&
+      DROID_PROTOCOL_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(result.message.raw, field)));
+    if (!structured && !hasProtocolEnvelope) {
+      return undefined;
     }
 
     const events = results.flatMap((result): AgentDisplayEvent[] => {

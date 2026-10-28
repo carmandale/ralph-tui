@@ -150,6 +150,54 @@ describe('parseDroidJsonlLine', () => {
 describe('DroidAgentPlugin.extractAgentText', () => {
   const marker = '<promise>COMPLETE</promise>';
 
+  test('allows incidental non-protocol JSON in untraced plaintext only', async () => {
+    const plugin = new DroidAgentPlugin();
+    const disabled = new DroidAgentPlugin();
+    await disabled.initialize({ enableTracing: false });
+    for (const json of [
+      { summary: 'ordinary JSON example' },
+      { futureAgentField: marker },
+      [{ summary: 'ordinary JSON example' }],
+      [],
+    ]) {
+      const stdout = `${JSON.stringify(json)}\n${marker}\n`;
+      expect(plugin.extractAgentText(stdout)).toBeUndefined();
+      expect(plugin.extractAgentText(stdout, { subagentTracing: false })).toBeUndefined();
+      expect(disabled.extractAgentText(stdout, { subagentTracing: true })).toBeUndefined();
+      expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBe('');
+    }
+  });
+
+  test('keeps envelope presence meaningful even when its value is malformed', async () => {
+    const plugin = new DroidAgentPlugin();
+    const disabled = new DroidAgentPlugin();
+    await disabled.initialize({ enableTracing: false });
+    for (const record of [
+      { type: null }, { type: [] }, { type: {} }, { type: '' },
+      { event: null }, { kind: [] }, { role: null }, { role: [] },
+      { type: 'future' }, { role: 'unknown' },
+      { tool_calls: null }, { tool_results: [] }, { result: null }, { error: null },
+      { type: 'system', message: marker },
+      { type: 'thinking', text: marker },
+      { type: 'usage', message: marker },
+      { role: 'tool', content: marker },
+    ]) {
+      const stdout = [JSON.stringify(record), '{"summary":"incidental JSON"}', marker].join('\n');
+      expect(plugin.extractAgentText(stdout)).toBe('');
+      expect(disabled.extractAgentText(stdout, { subagentTracing: true })).toBe('');
+      expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBe('');
+    }
+  });
+
+  test('remains conservative when plaintext resembles a protocol envelope', async () => {
+    const plugin = new DroidAgentPlugin();
+    const disabled = new DroidAgentPlugin();
+    await disabled.initialize({ enableTracing: false });
+    const stdout = `{"type":"example","value":"ordinary JSON"}\n${marker}`;
+    expect(plugin.extractAgentText(stdout)).toBe('');
+    expect(disabled.extractAgentText(stdout)).toBe('');
+  });
+
   test('retains supported message, completion, and successful result fields', () => {
     const plugin = new DroidAgentPlugin();
     for (const record of [
