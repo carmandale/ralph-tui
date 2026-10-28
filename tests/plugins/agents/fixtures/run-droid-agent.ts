@@ -28,6 +28,13 @@ let streamedStdout = '';
 let streamedStderr = '';
 let runningAtStart = false;
 const currentPromises: Promise<unknown>[] = [];
+const observeCurrent = () => {
+  for (let i = 0; i < 2; i++) {
+    const current = agent.getCurrentExecution();
+    if (!current?.isRunning()) throw new Error('Missing running execution');
+    currentPromises.push(current.promise);
+  }
+};
 const handle = agent.execute(process.env.DROID_PROMPT ?? 'test prompt', [], {
   cwd: process.env.DROID_CWD,
   flags: ['--runtime-flag'],
@@ -35,13 +42,12 @@ const handle = agent.execute(process.env.DROID_PROMPT ?? 'test prompt', [], {
   onStart: () => {
     starts++;
     runningAtStart = handle.isRunning();
-    if (mode === 'current-handle') {
-      currentPromises.push(agent.getCurrentExecution()!.promise, agent.getCurrentExecution()!.promise);
-    }
+    observeCurrent();
   },
   onEnd: () => { ends++; if (mode === 'throw-on-end') throw new Error('test callback'); },
   onStdout: (text) => {
     streamedStdout += text;
+    observeCurrent();
     if (mode === 'interrupt') handle.interrupt();
     if (mode === 'interrupt-all') agent.interruptAll();
   },
@@ -70,4 +76,6 @@ console.log(JSON.stringify({ ...result, starts, ends, runningAtStart,
   runningAfterEnd: handle.isRunning(), streamedStdout, streamedStderr,
   currentAfterEnd: agent.getCurrentExecution() !== undefined,
   currentHandlesMatch: currentResults.every((value) => value === result),
+  currentPromisesMatch: currentPromises.every((value) => value === handle.promise),
+  currentObserverCount: currentPromises.length,
 }));

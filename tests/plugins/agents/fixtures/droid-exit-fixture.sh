@@ -38,4 +38,10 @@ case "${DROID_FIXTURE_MODE:-clean}" in
   fail)
     exit 7
     ;;
+  large)
+    head -c 2000100 /dev/zero | tr '\000' x
+    printf '%s' 'stdout-tail'
+    head -c 2000100 /dev/zero | tr '\000' y >&2
+    printf '%s' 'stderr-tail' >&2
+    ;;
 esac

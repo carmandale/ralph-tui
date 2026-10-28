@@ -27,6 +27,8 @@ interface FixtureResult {
   streamedStdout: string;
   streamedStderr: string;
   currentHandlesMatch: boolean;
+  currentPromisesMatch: boolean;
+  currentObserverCount: number;
 }
 
 describe('DroidAgentPlugin process exit completion', () => {
@@ -119,6 +121,21 @@ describe('DroidAgentPlugin process exit completion', () => {
   });
 
   for (const direct of [false, true]) {
+    test(`${direct ? 'direct construction' : 'script shim'} inherits bounded output accumulation`, async () => {
+      if (platform() === 'win32') return;
+      const result = await runFixture('large', {
+        AGENT_FIXTURE_PATH: fixturePath, DROID_SCRIPT_FIXTURE_PATH: scriptFixturePath,
+        DROID_DIRECT_LAUNCH: direct ? '1' : '0',
+      });
+      for (const stream of ['stdout', 'stderr'] as const) {
+        expect(result[stream]).toHaveLength(2_000_000);
+        expect(result[stream]).toStartWith('[...agent output truncated in memory...]\n');
+        expect(result[stream]).toEndWith(`${stream}-tail`);
+      }
+      expect(result.streamedStdout.length).toBeGreaterThan(result.stdout.length);
+      expect(result.streamedStderr.length).toBeGreaterThan(result.stderr.length);
+    });
+
     for (const mode of ['clean', 'fail', 'throw-on-end', 'current-handle', 'timeout', 'interrupt', 'interrupt-all', 'early-interrupt']) {
       test(`${direct ? 'direct construction' : 'script shim'} inherits ${mode} lifecycle`, async () => {
         if (platform() === 'win32') return;
@@ -131,6 +148,8 @@ describe('DroidAgentPlugin process exit completion', () => {
         expect(result.status).toBe(interrupted ? 'interrupted' : mode === 'timeout' ? 'timeout' : mode === 'fail' ? 'failed' : 'completed');
         expect(result.interrupted).toBe(interrupted);
         expect(result.currentHandlesMatch).toBe(true);
+        expect(result.currentPromisesMatch).toBe(true);
+        if (mode !== 'early-interrupt') expect(result.currentObserverCount).toBeGreaterThanOrEqual(2);
         if (mode === 'fail') expect(result.exitCode).toBe(7);
         if (mode === 'clean' || mode === 'throw-on-end') {
           expect(result.stdout).toBe(result.streamedStdout);

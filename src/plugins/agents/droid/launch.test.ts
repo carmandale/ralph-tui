@@ -5,7 +5,11 @@
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as os from 'node:os';
+import * as childProcess from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { BaseAgentPlugin } from '../base.js';
+import { SandboxWrapper } from '../../../sandbox/wrapper.js';
 import type { AgentExecuteOptions } from '../types.js';
 import { DroidAgentPlugin } from './index.js';
 
@@ -74,4 +78,41 @@ describe('Droid launch invocation', () => {
     const invocation = new LaunchProbe().launch('droid', 'prompt');
     expect(invocation.args[2]).toContain(`cd '${process.cwd()}' &&`);
   });
+
+  for (const currentPlatform of ['linux', 'win32'] as const) {
+    test(`base spawn applies ${currentPlatform} launch options and sandbox ordering`, async () => {
+      platform.mockReturnValue(currentPlatform);
+      const proc = Object.assign(new EventEmitter(), {
+        stdout: new PassThrough(), stderr: new PassThrough(), stdin: null,
+      });
+      const spawn = spyOn(childProcess, 'spawn').mockImplementation((() => {
+        queueMicrotask(() => proc.emit('close', 0, null));
+        return proc as unknown as childProcess.ChildProcess;
+      }) as typeof childProcess.spawn);
+      const wrap = spyOn(SandboxWrapper.prototype, 'wrapCommand').mockReturnValue({
+        command: '/sandbox wrapper', args: ['wrapped'],
+      });
+      try {
+        const agent = new LaunchProbe();
+        await agent.initialize({ command: '/agent path/droid' });
+        const result = await agent.execute('prompt', [], {
+          cwd: '/working dir', timeout: 0, env: { CI: 'false', CUSTOM_VALUE: 'kept' },
+          sandbox: { enabled: true, mode: 'bwrap' },
+        }).promise;
+        expect(result.status).toBe('completed');
+        expect(wrap.mock.calls[0][0]).toBe(currentPlatform === 'linux' ? 'script' : '/agent path/droid');
+        expect(wrap.mock.calls[0][1][0]).toBe(currentPlatform === 'linux' ? '-q' : 'exec');
+        const [command, args, options] = spawn.mock.calls[0];
+        expect(command).toBe(currentPlatform === 'win32' ? '"/sandbox wrapper"' : '/sandbox wrapper');
+        expect(args).toEqual(['wrapped']);
+        expect(options).toMatchObject({
+          cwd: '/working dir', stdio: ['ignore', 'pipe', 'pipe'], shell: currentPlatform === 'win32',
+          env: { CI: 'true', TERM: 'dumb', INK_DISABLE_INPUT: '1', CUSTOM_VALUE: 'kept' },
+        });
+      } finally {
+        spawn.mockRestore();
+        wrap.mockRestore();
+      }
+    });
+  }
 });
