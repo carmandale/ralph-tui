@@ -119,6 +119,18 @@ describe.skipIf(process.platform === 'win32')('actual per-call timeout with real
     });
   }
 
+  test('rejects earlier narrative completion when a real child exits nonzero', async () => {
+    const result = await runFixture<EngineReport>('engine-failure');
+    expect(result.iterations).toEqual([
+      { status: 'failed', agentStatus: 'failed', taskCompleted: false, promiseComplete: true, exitCode: 7 },
+    ]);
+    expect(result.completeCalls).toBe(0);
+    expect(result.tasksCompleted).toBe(0);
+    expect(result.events).not.toContain('task:completed');
+    expect(result.events.some(type => type.startsWith('task:auto-commit'))).toBe(false);
+    expect(result.failureActions).toEqual(['abort']);
+  });
+
   test('allows normal completion on the existing retry after a timed-out marker', async () => {
     const result = await runFixture<EngineReport>('engine-recover');
     expect(result.iterations).toEqual([

@@ -108,11 +108,13 @@ async function runAgent(mode: string) {
 async function runEngine(mode: string) {
   const cwd = await mkdtemp(join(tmpdir(), 'ralph-timeout-engine-'));
   const name = `timeout-fixture-${process.pid}`;
-  const strategy = mode === 'recover' ? 'retry' : mode;
+  const strategy = mode === 'recover' ? 'retry' : mode === 'failure' ? 'abort' : mode;
   if (strategy !== 'retry' && strategy !== 'skip' && strategy !== 'abort') {
     throw new Error(`Unknown engine mode: ${mode}`);
   }
-  const scripts = [graceful(0) + ` console.log('${marker}');`];
+  const scripts = [mode === 'failure'
+    ? `console.log('${marker}'); process.exit(7);`
+    : graceful(0) + ` console.log('${marker}');`];
   if (mode === 'recover') scripts.push(`console.log('${marker}');`);
   const registry = getAgentRegistry();
   registry.registerBuiltin(() => new TimeoutFixtureAgent(scripts));
