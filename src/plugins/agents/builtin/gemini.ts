@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import { BaseAgentPlugin, quoteForWindowsShell } from '../base.js';
 import {
-  extractAgentTextFromEvents,
+  extractAgentTextFromJsonl,
   processAgentEvents,
   processAgentEventsToSegments,
   type AgentDisplayEvent,
@@ -128,9 +128,7 @@ export class GeminiAgentPlugin extends BaseAgentPlugin {
   protected override defaultTimeout = 0;
 
   extractAgentText(stdout: string): string | undefined {
-    const events = parseGeminiOutputToEvents(stdout);
-    if (events.length === 0) return undefined;
-    return extractAgentTextFromEvents(events);
+    return extractAgentTextFromJsonl(stdout, parseGeminiJsonLine);
   }
 
   override async initialize(config: Record<string, unknown>): Promise<void> {

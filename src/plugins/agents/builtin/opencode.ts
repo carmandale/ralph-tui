@@ -13,7 +13,7 @@ import {
   shouldUseWindowsShell,
 } from '../base.js';
 import {
-  extractAgentTextFromEvents,
+  extractAgentTextFromJsonl,
   processAgentEvents,
   processAgentEventsToSegments,
   type AgentDisplayEvent,
@@ -476,11 +476,7 @@ export class OpenCodeAgentPlugin extends BaseAgentPlugin {
   }
 
   extractAgentText(stdout: string): string | undefined {
-    const events = stdout
-      .split('\n')
-      .flatMap((line) => parseOpenCodeJsonLine(line.trim()));
-    if (events.length === 0) return undefined;
-    return extractAgentTextFromEvents(events);
+    return extractAgentTextFromJsonl(stdout, parseOpenCodeJsonLine);
   }
 
   /**

@@ -8,7 +8,7 @@
 import { spawn } from 'node:child_process';
 import { BaseAgentPlugin, findCommandPath, quoteForWindowsShell } from '../base.js';
 import {
-  extractAgentTextFromEvents,
+  extractAgentTextFromJsonl,
   processAgentEvents,
   processAgentEventsToSegments,
   type AgentDisplayEvent,
@@ -381,6 +381,8 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
                 name: block.name,
                 input: block.input as Record<string, unknown>,
               });
+            } else {
+              events.push({ type: 'system' });
             }
           }
         }
@@ -437,24 +439,13 @@ export class ClaudeAgentPlugin extends BaseAgentPlugin {
   }
 
   extractAgentText(stdout: string): string | undefined {
-    const events = this.parseClaudeOutputToEvents(stdout);
-    const resultTexts: string[] = [];
-
-    for (const line of stdout.split('\n')) {
-      try {
-        const event = JSON.parse(line.trim()) as Record<string, unknown>;
-        if (event.type === 'result' && typeof event.result === 'string') {
-          resultTexts.push(event.result);
-        }
-      } catch {
-        // Ignore non-JSON lines while parsing structured output.
+    return extractAgentTextFromJsonl(stdout, (line) => {
+      const event = JSON.parse(line) as Record<string, unknown>;
+      if (event.type === 'result' && typeof event.result === 'string') {
+        return [{ type: 'system' }, { type: 'text', content: event.result }];
       }
-    }
-
-    if (events.length === 0 && resultTexts.length === 0) return undefined;
-
-    const narrative = extractAgentTextFromEvents(events);
-    return narrative ? [narrative, ...resultTexts].join('\n') : resultTexts.join('\n');
+      return this.parseClaudeJsonLine(line);
+    });
   }
 
   /**

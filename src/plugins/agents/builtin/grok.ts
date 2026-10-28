@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { platform } from 'node:os';
 import { BaseAgentPlugin, findCommandPath, quoteForWindowsShell } from '../base.js';
 import {
-  extractAgentTextFromEvents,
+  extractAgentTextFromJsonl,
   processAgentEvents,
   processAgentEventsToSegments,
   type AgentDisplayEvent,
@@ -129,9 +129,7 @@ export class GrokAgentPlugin extends BaseAgentPlugin {
   protected override defaultTimeout = 0;
 
   extractAgentText(stdout: string): string | undefined {
-    const events = parseGrokOutputToEvents(stdout);
-    if (events.length === 0) return undefined;
-    return extractAgentTextFromEvents(events);
+    return extractAgentTextFromJsonl(stdout, parseGrokJsonLine);
   }
 
   override async initialize(config: Record<string, unknown>): Promise<void> {

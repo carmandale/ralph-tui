@@ -10,6 +10,7 @@
 import { describe, test, expect } from 'bun:test';
 import { AgentRegistry } from '../plugins/agents/registry.js';
 import { ClaudeAgentPlugin } from '../plugins/agents/builtin/claude.js';
+import { AntigravityAgentPlugin } from '../plugins/agents/builtin/antigravity.js';
 import type { AgentPlugin } from '../plugins/agents/types.js';
 import type { TrackerPlugin, TrackerTask, TaskFilter } from '../plugins/trackers/types.js';
 import type { RalphConfig } from '../config/types.js';
@@ -154,6 +155,58 @@ function createExecutionTracker(completeCalls: string[]): TrackerPlugin {
 
 describe('ExecutionEngine', () => {
   describe('completion detection', () => {
+    test.each([
+      {
+        name: 'thinking-only Claude output does not fall back to raw JSON',
+        plugin: new ClaudeAgentPlugin(),
+        stdout: JSON.stringify({
+          type: 'assistant',
+          message: { content: [{ type: 'thinking', thinking: '<promise>COMPLETE</promise>' }] },
+        }),
+        completed: false,
+      },
+      {
+        name: 'plain text retains completion detection',
+        plugin: new ClaudeAgentPlugin(),
+        stdout: '<promise>COMPLETE</promise>',
+        completed: true,
+      },
+      {
+        name: 'adjacent Antigravity deltas complete the task',
+        plugin: new AntigravityAgentPlugin(),
+        stdout: ['<promise>COM', 'PLETE</promise>'].map((text_delta) => JSON.stringify({
+          event: 'step_update', step_update: { step_type: 'agent_response', text_delta },
+        })).join('\n'),
+        completed: true,
+      },
+      {
+        name: 'Antigravity tool boundaries cannot form a completion marker',
+        plugin: new AntigravityAgentPlugin(),
+        stdout: [
+          { event: 'step_update', step_update: { step_type: 'agent_response', text_delta: '<promise>' } },
+          { event: 'step_update', step_update: { step_type: 'tool', state: 'DONE' } },
+          { event: 'step_update', step_update: { step_type: 'agent_response', text_delta: 'COMPLETE</promise>' } },
+        ].map((record) => JSON.stringify(record)).join('\n'),
+        completed: false,
+      },
+    ])('$name', async ({ plugin, stdout, completed }) => {
+      const completeCalls: string[] = [];
+      const task = createMockTask();
+      const engine = new ExecutionEngine(createMockConfig());
+      const internals = engine as unknown as {
+        agent: AgentPlugin;
+        tracker: TrackerPlugin;
+        runIteration: (task: TrackerTask) => Promise<{ taskCompleted: boolean }>;
+      };
+      internals.agent = createMockAgent(stdout, plugin.extractAgentText.bind(plugin));
+      internals.tracker = createExecutionTracker(completeCalls);
+
+      const result = await internals.runIteration(task);
+
+      expect(result.taskCompleted).toBe(completed);
+      expect(completeCalls).toEqual(completed ? [task.id] : []);
+    });
+
     test('ignores completion markers in structured tool results', async () => {
       const stdout = [
         JSON.stringify({

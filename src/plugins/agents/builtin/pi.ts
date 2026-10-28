@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import { BaseAgentPlugin, findCommandPath, quoteForWindowsShell } from '../base.js';
 import {
-  extractAgentTextFromEvents,
+  extractAgentTextFromJsonl,
   processAgentEvents,
   processAgentEventsToSegments,
   type AgentDisplayEvent,
@@ -106,6 +106,8 @@ export function parsePiJsonLine(input: string | Record<string, unknown>): AgentD
             ((block as Record<string, unknown>).text as string).length > 0
           ) {
             events.push({ type: 'text', content: (block as Record<string, unknown>).text as string });
+          } else {
+            events.push({ type: 'system' });
           }
         }
       }
@@ -410,27 +412,14 @@ export class PiAgentPlugin extends BaseAgentPlugin {
   }
 
   extractAgentText(stdout: string): string | undefined {
-    const structuredTypes = new Set(['message_update', 'message_end', 'turn_end']);
-    let isStructured = false;
-    const events: AgentDisplayEvent[] = [];
-
-    for (const line of stdout.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-
-      try {
-        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-        if (typeof parsed.type === 'string' && structuredTypes.has(parsed.type)) {
-          isStructured = true;
-          events.push(...this.parsePiJsonLine(parsed));
-        }
-      } catch {
-        // Ignore non-JSON lines while parsing structured output.
+    return extractAgentTextFromJsonl(stdout, (line) => {
+      const parsed = JSON.parse(line) as Record<string, unknown>;
+      const message = parsed.message as { role?: unknown } | undefined;
+      if (parsed.type === 'message_end' && message?.role !== undefined && message.role !== 'assistant') {
+        return [{ type: 'tool_result' }];
       }
-    }
-
-    if (!isStructured) return undefined;
-    return extractAgentTextFromEvents(events);
+      return this.parsePiJsonLine(parsed);
+    });
   }
 
   /**

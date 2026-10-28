@@ -7,7 +7,7 @@
 import { spawn } from 'node:child_process';
 import { BaseAgentPlugin, findCommandPath, quoteForWindowsShell } from '../base.js';
 import {
-  extractAgentTextFromEvents,
+  extractAgentTextFromJsonl,
   processAgentEvents,
   processAgentEventsToSegments,
   type AgentDisplayEvent,
@@ -44,7 +44,11 @@ export function parseKimiJsonLine(jsonLine: string): AgentDisplayEvent[] {
     if (event.content && Array.isArray(event.content)) {
       for (const item of event.content) {
         if (item.type === 'text' && item.text) {
-          events.push({ type: 'text', content: item.text });
+          if (event.role === undefined || event.role === 'assistant') {
+            events.push({ type: 'text', content: item.text });
+          } else {
+            events.push({ type: 'tool_result' });
+          }
         } else if (item.type === 'function' && item.function) {
           // Tool call
           const toolName = item.function.name || 'unknown';
@@ -63,12 +67,18 @@ export function parseKimiJsonLine(jsonLine: string): AgentDisplayEvent[] {
             events.push({ type: 'error', message: String(item.output).slice(0, 200) });
           }
           events.push({ type: 'tool_result' });
+        } else {
+          events.push({ type: 'system' });
         }
         // Skip: think (internal reasoning), status updates, etc.
       }
     } else if (event.type === 'text' && event.text) {
       // Handle top-level text content (only when no content array)
-      events.push({ type: 'text', content: event.text });
+      if (event.role === undefined || event.role === 'assistant') {
+        events.push({ type: 'text', content: event.text });
+      } else {
+        events.push({ type: 'tool_result' });
+      }
     } else if (event.type === 'error' || event.error) {
       // Handle error events (only when no content array)
       const msg = extractErrorMessage(event.error) || extractErrorMessage(event.message) || 'Unknown error';
@@ -123,9 +133,9 @@ export class KimiAgentPlugin extends BaseAgentPlugin {
   protected override defaultTimeout = 0;
 
   extractAgentText(stdout: string): string | undefined {
-    const events = parseKimiOutputToEvents(stdout);
-    if (events.length === 0) return undefined;
-    return extractAgentTextFromEvents(events);
+    return extractAgentTextFromJsonl(stdout, parseKimiJsonLine,
+      (record) => Array.isArray(record.content) || typeof record.type === 'string'
+    );
   }
 
   override async initialize(config: Record<string, unknown>): Promise<void> {

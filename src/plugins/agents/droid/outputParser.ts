@@ -280,7 +280,8 @@ function parseToolResult(value: unknown): DroidToolResult | null {
 }
 
 function isToolResultPayload(payload: Record<string, unknown>): boolean {
-  const payloadType = readString(payload.type)?.toLowerCase().replace(/[-_]/g, '');
+  const payloadType = (readString(payload.type) ?? readString(payload.event) ?? readString(payload.kind))
+    ?.toLowerCase().replace(/[-_]/g, '');
   return payloadType === 'toolresult' || readString(payload.role)?.toLowerCase() === 'tool';
 }
 

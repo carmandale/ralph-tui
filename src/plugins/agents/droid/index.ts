@@ -24,7 +24,7 @@ import type {
 import { buildDroidCommandArgs } from './commandBuilder.js';
 import { DROID_DEFAULT_COMMAND } from './config.js';
 import { DroidAgentConfigSchema, type DroidReasoningEffort } from './schema.js';
-import { extractAgentTextFromEvents } from '../output-formatting.js';
+import { extractAgentTextFromEvents, type AgentDisplayEvent } from '../output-formatting.js';
 import {
   createDroidStreamingJsonlParser,
   parseDroidMessageToEvents,
@@ -149,7 +149,10 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     const messages = parser.getState().messages;
     if (messages.length === 0) return undefined;
 
-    const events = messages.flatMap((message) => parseDroidMessageToEvents(message));
+    const events = messages.flatMap((message): AgentDisplayEvent[] => {
+      const parsed = parseDroidMessageToEvents(message);
+      return parsed.length ? parsed : [{ type: 'system' }];
+    });
     return extractAgentTextFromEvents(events);
   }
 
