@@ -233,12 +233,13 @@ describe('explicit plain-text modes', () => {
     }
   });
 
-  test.each([true, false])('Droid enableTracing=%s respects its effective output mode', async (enableTracing) => {
+  test.each([true, false])('Droid enableTracing=%s does not opt out of structured output', async (enableTracing) => {
     const plugin = new DroidAgentPlugin();
     await plugin.initialize({ enableTracing });
     for (const stdout of [marker, `[...agent output truncated in memory...]\n${marker}`]) {
-      expect(plugin.extractAgentText(stdout)).toBeUndefined();
-      expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBe(enableTracing ? '' : undefined);
+      expect(plugin.extractAgentText(stdout)).toBe('');
+      expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBe('');
+      expect(plugin.extractAgentText(stdout, { flags: ['-o', 'text'] })).toBeUndefined();
     }
   });
 });

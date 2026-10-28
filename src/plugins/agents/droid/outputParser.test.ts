@@ -154,7 +154,7 @@ describe('DroidAgentPlugin.extractAgentText', () => {
     for (const flags of [
       ['--output-format', 'stream-json'], ['--output-format=stream-json'],
       ['-o', 'stream-json'], ['-o=stream-json'],
-      ['--output-format', 'json'], ['-o', 'json'], ['--output-format=stream-jsonrpc'],
+      ['--output-format', 'json'], ['-o', 'json'],
     ]) {
       const plugin = new DroidAgentPlugin();
       await plugin.initialize({ defaultFlags: flags, enableTracing: false });
@@ -172,9 +172,9 @@ describe('DroidAgentPlugin.extractAgentText', () => {
     }
   });
 
-  test('uses the last format in actual argument order, including implicit tracing output', async () => {
+  test('uses the last explicit format independently of tracing', async () => {
     const stdout = `{"summary":"incidental"}\n${marker}`;
-    for (const flags of [['--output-format', 'text'], ['--output-format=text'], ['-o', 'text'], []]) {
+    for (const flags of [['--output-format', 'text'], ['--output-format=text'], ['-o', 'text'], ['-o=text']]) {
       const plugin = new DroidAgentPlugin();
       await plugin.initialize({ defaultFlags: flags, enableTracing: false });
       expect(plugin.extractAgentText(stdout, { subagentTracing: false })).toBeUndefined();
@@ -182,7 +182,7 @@ describe('DroidAgentPlugin.extractAgentText', () => {
     const plugin = new DroidAgentPlugin();
     await plugin.initialize({ defaultFlags: ['--output-format', 'stream-json'] });
     expect(plugin.extractAgentText(stdout, { flags: ['--output-format', 'text'] })).toBeUndefined();
-    expect(plugin.extractAgentText(stdout, { flags: ['-o', 'text'], subagentTracing: true })).toBe('');
+    expect(plugin.extractAgentText(stdout, { flags: ['-o', 'text'], subagentTracing: true })).toBeUndefined();
     const plaintext = new DroidAgentPlugin();
     await plaintext.initialize({ defaultFlags: ['-o', 'text'] });
     expect(plaintext.extractAgentText(stdout, { flags: ['--output-format=json'] })).toBe('');
@@ -232,7 +232,7 @@ describe('DroidAgentPlugin.extractAgentText', () => {
     expect(plugin.extractAgentText(split, { subagentTracing: true })).not.toMatch(/<promise>\s*COMPLETE\s*<\/promise>/);
   });
 
-  test('allows incidental non-protocol JSON in untraced plaintext only', async () => {
+  test('requires explicit text mode even for incidental JSON and disabled tracing', async () => {
     const plugin = new DroidAgentPlugin();
     const disabled = new DroidAgentPlugin();
     await disabled.initialize({ enableTracing: false });
@@ -243,9 +243,10 @@ describe('DroidAgentPlugin.extractAgentText', () => {
       [],
     ]) {
       const stdout = `${JSON.stringify(json)}\n${marker}\n`;
-      expect(plugin.extractAgentText(stdout)).toBeUndefined();
-      expect(plugin.extractAgentText(stdout, { subagentTracing: false })).toBeUndefined();
-      expect(disabled.extractAgentText(stdout, { subagentTracing: true })).toBeUndefined();
+      expect(plugin.extractAgentText(stdout)).toBe('');
+      expect(plugin.extractAgentText(stdout, { subagentTracing: false })).toBe('');
+      expect(disabled.extractAgentText(stdout, { subagentTracing: true })).toBe('');
+      expect(plugin.extractAgentText(stdout, { flags: ['-o', 'text'] })).toBeUndefined();
       expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBe('');
     }
   });
@@ -271,13 +272,49 @@ describe('DroidAgentPlugin.extractAgentText', () => {
     }
   });
 
-  test('remains conservative when plaintext resembles a protocol envelope', async () => {
+  test('honors explicit plaintext even when it resembles a protocol envelope', async () => {
     const plugin = new DroidAgentPlugin();
     const disabled = new DroidAgentPlugin();
     await disabled.initialize({ enableTracing: false });
     const stdout = `{"type":"example","value":"ordinary JSON"}\n${marker}`;
     expect(plugin.extractAgentText(stdout)).toBe('');
     expect(disabled.extractAgentText(stdout)).toBe('');
+    await plugin.initialize({ outputFormat: 'text' });
+    expect(plugin.extractAgentText(stdout, { subagentTracing: true })).toBeUndefined();
+    expect(disabled.extractAgentText(stdout, { flags: ['--output-format=text'] })).toBeUndefined();
+  });
+
+  test('fails closed on missing, empty, unknown, or unsupported protocol formats', () => {
+    const plugin = new DroidAgentPlugin();
+    const record = JSON.stringify({ type: 'message', text: marker });
+    for (const flags of [
+      ['--output-format'], ['-o'], ['--output-format', ''], ['--output-format='], ['-o='],
+      ['--output-format', 'future'], ['--output-format', 'stream-jsonrpc'],
+      ['--output-format', '--', '--output-format', 'text'],
+      ['-o', '--', '-o=text'],
+      ['--output-format=', '-o=text'], ['--output-format', '', '-o=text'],
+    ]) {
+      expect(plugin.extractAgentText(marker, { flags })).toBe('');
+      expect(plugin.extractAgentText(record, { flags })).toBe('');
+    }
+    expect(plugin.extractAgentText(marker, { flags: ['--', '-o', 'text'] })).toBe('');
+    expect(plugin.extractAgentText(record, { flags: ['--', '-o', 'text'] })).toBe(marker);
+    expect(plugin.extractAgentText(marker, { flags: ['-o=text', '--', '-o', 'stream-json'] })).toBeUndefined();
+  });
+
+  test('accepts a pretty-printed JSON result only in declared json mode', () => {
+    const plugin = new DroidAgentPlugin();
+    const stdout = JSON.stringify({ type: 'result', subtype: 'success', result: marker }, null, 2);
+    expect(plugin.extractAgentText(stdout, { flags: ['-o', 'json'] })).toBe(marker);
+    expect(plugin.extractAgentText(stdout)).toBe('');
+    for (const invalid of [
+      'garbage:' + stdout, stdout + 'junk', stdout + '\n' + stdout, stdout.slice(0, -1),
+      JSON.stringify({ future: marker }, null, 2),
+      JSON.stringify({ type: 'result', is_error: true, result: marker }, null, 2),
+      JSON.stringify({ type: 'tool_result', content: marker }, null, 2),
+    ]) {
+      expect(plugin.extractAgentText(invalid, { flags: ['--output-format', 'json'] })).toBe('');
+    }
   });
 
   test('retains supported message, completion, and successful result fields', () => {

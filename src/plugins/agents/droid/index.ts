@@ -20,22 +20,16 @@ import type {
   AgentExecuteOptions,
   AgentExecutionResult,
   AgentExecutionStatus,
+  AgentSetupQuestion,
 } from '../types.js';
 import { buildDroidCommandArgs, getDroidOutputFormat } from './commandBuilder.js';
 import { DROID_DEFAULT_COMMAND } from './config.js';
-import { DroidAgentConfigSchema, type DroidReasoningEffort } from './schema.js';
+import { DroidAgentConfigSchema, type DroidOutputFormat, type DroidReasoningEffort } from './schema.js';
 import { extractAgentTextFromEvents, type AgentDisplayEvent } from '../output-formatting.js';
 import {
   parseDroidJsonlLine,
   parseDroidCompletionEvents,
 } from './outputParser.js';
-
-const DROID_PROTOCOL_FIELDS = [
-  'type', 'event', 'kind', 'role',
-  'tool', 'tool_call', 'toolCall', 'tool_calls', 'toolCalls',
-  'tool_result', 'toolResult', 'tool_results', 'toolResults',
-  'result', 'subtype', 'is_error', 'isError', 'error', 'error_message', 'errorMessage',
-];
 
 export class DroidAgentPlugin extends BaseAgentPlugin {
   private readonly baseMeta: AgentPluginMeta = {
@@ -58,6 +52,7 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
 
   private model?: string;
   private reasoningEffort?: DroidReasoningEffort;
+  private outputFormat: DroidOutputFormat = 'stream-json';
   // Default to true: droid exec cannot show interactive prompts without a TTY
   private skipPermissions = true;
   private enableTracing = true;
@@ -91,6 +86,7 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     const parsed = DroidAgentConfigSchema.safeParse({
       model: config.model,
       reasoningEffort: config.reasoningEffort,
+      outputFormat: config.outputFormat,
       skipPermissions: config.skipPermissions,
       enableTracing: config.enableTracing,
     });
@@ -114,6 +110,7 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     }
 
     this.enableTracing = parsed.data.enableTracing;
+    this.outputFormat = parsed.data.outputFormat;
     if (!this.enableTracing) {
       this.effectiveSupportsSubagentTracing = false;
     }
@@ -131,14 +128,32 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
       model: this.model,
       reasoningEffort: this.reasoningEffort,
       skipPermissions: this.skipPermissions,
-      enableTracing: this.enableTracing && options?.subagentTracing === true,
+      outputFormat: this.outputFormat,
+      flags: [...this.defaultFlags, ...(options?.flags ?? [])],
     });
   }
 
   private buildExecutionArgs(prompt: string, files?: AgentFileContext[], options?: AgentExecuteOptions): string[] {
-    const [subcommand, ...args] = this.buildArgs(prompt, files, options);
-    // Droid requires the exec subcommand before configured and per-execution flags.
-    return [subcommand, ...this.defaultFlags, ...(options?.flags ?? []), ...args];
+    return this.buildArgs(prompt, files, options);
+  }
+
+  override getSetupQuestions(): AgentSetupQuestion[] {
+    return [
+      ...super.getSetupQuestions(),
+      {
+        id: 'outputFormat',
+        prompt: 'Output format:',
+        type: 'select',
+        choices: [
+          { value: 'stream-json', label: 'Streaming JSON (default)' },
+          { value: 'json', label: 'JSON' },
+          { value: 'text', label: 'Plain text (raw completion scanning)' },
+        ],
+        default: 'stream-json',
+        required: false,
+        help: 'Structured output keeps tool and diagnostic text out of completion detection. Independent of enableTracing.',
+      },
+    ];
   }
 
   /**
@@ -156,15 +171,16 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
   }
 
   extractAgentText(stdout: string, options?: AgentExecuteOptions): string | undefined {
-    const results = stdout.split('\n').map((raw) => ({ raw, ...parseDroidJsonlLine(raw) }));
     const format = getDroidOutputFormat(this.buildExecutionArgs('', undefined, options).slice(1, -1));
-    const structured = format !== undefined && format !== 'text';
-    const hasProtocolEnvelope = results.some((result) => result.success &&
-      DROID_PROTOCOL_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(result.message.raw, field)));
-    if (!structured && !hasProtocolEnvelope) {
+    if (format === 'text') {
       return undefined;
     }
+    if (format !== 'stream-json' && format !== 'json') {
+      return '';
+    }
 
+    const lines = format === 'json' ? [stdout] : stdout.split('\n');
+    const results = lines.map((raw) => ({ raw, ...parseDroidJsonlLine(raw) }));
     const events = results.flatMap((result): AgentDisplayEvent[] => {
       if (!result.success) {
         return result.error === 'Empty line' ? [] : [{ type: 'system' }];

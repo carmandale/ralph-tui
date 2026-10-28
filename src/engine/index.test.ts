@@ -159,15 +159,26 @@ function createExecutionTracker(completeCalls: string[]): TrackerPlugin {
 
 describe('ExecutionEngine', () => {
   describe('completion detection', () => {
-    test.each(['empty', 'malformed', 'unknown', 'narrative'])(
-      'honors configured Droid structured flags in the engine: %s', async (kind) => {
+    test.each([
+      { kind: 'empty', options: {}, completed: false },
+      { kind: 'malformed', options: {}, completed: false },
+      { kind: 'unknown', options: {}, completed: false },
+      { kind: 'narrative', options: {}, completed: true },
+      { kind: 'example', options: {}, completed: false },
+      { kind: 'example', options: { outputFormat: 'text' }, completed: true },
+      { kind: 'example', options: { defaultFlags: ['-o=text'] }, completed: true },
+      { kind: 'example', options: { outputFormat: 'text', defaultFlags: ['--output-format', 'stream-json'] }, completed: false },
+      { kind: 'example', options: { defaultFlags: ['-o', 'stream-json', '--output-format=text'] }, completed: true },
+      { kind: 'narrative', options: { defaultFlags: ['-o', 'text', '--output-format=stream-json'] }, completed: true },
+    ])(
+      'honors the effective Droid format in the engine: %j', async ({ kind, options, completed }) => {
         const marker = '<promise>COMPLETE</promise>';
         const stdout = kind === 'empty' ? '' : kind === 'malformed' ? `not-json ${marker}`
-          : JSON.stringify(kind === 'narrative'
+          : kind === 'example' ? `{"type":"example"}\n${marker}` : JSON.stringify(kind === 'narrative'
             ? { type: 'message', role: 'assistant', text: marker }
             : { futureAgentField: marker });
         const plugin = new DroidAgentPlugin();
-        await plugin.initialize({ defaultFlags: ['--output-format', 'stream-json'], enableTracing: false });
+        await plugin.initialize({ ...options, enableTracing: false });
         expect(plugin.meta.supportsSubagentTracing).toBe(false);
         const completeCalls: string[] = [];
         const task = createMockTask();
@@ -192,8 +203,8 @@ describe('ExecutionEngine', () => {
         internals.tracker = createExecutionTracker(completeCalls);
         const result = await internals.runIteration(task);
         expect(extractedFlags).toEqual(executedFlags);
-        expect(result.taskCompleted).toBe(kind === 'narrative');
-        expect(completeCalls).toEqual(kind === 'narrative' ? [task.id] : []);
+        expect(result.taskCompleted).toBe(completed);
+        expect(completeCalls).toEqual(completed ? [task.id] : []);
       }
     );
 
