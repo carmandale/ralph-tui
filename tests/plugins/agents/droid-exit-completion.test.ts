@@ -185,31 +185,39 @@ describe('DroidAgentPlugin process exit completion', () => {
     }
   }
 
-  test('real Linux script preserves prompt bytes, cwd, echo suppression, flags, and filtered environment', async () => {
-    if (platform() !== 'linux') return;
-    tempDir = await mkdtemp(join(tmpdir(), "ralph-droid-pty's-"));
-    const command = join(tempDir, "fake droid's.ts");
-    await writeFile(command, `#!${process.execPath}
+  for (const authCase of ['filtered', 'passthrough', 'explicit']) {
+    test(`real Linux script preserves prompt bytes, cwd, echo, flags and ${authCase} authentication environment`, async () => {
+      if (platform() !== 'linux') return;
+      tempDir = await mkdtemp(join(tmpdir(), "ralph-droid-pty's-"));
+      const command = join(tempDir, "fake droid's.ts");
+      await writeFile(command, `#!${process.execPath}
 console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(),
   tty: Boolean(process.stdin.isTTY), echo: require('node:child_process').execSync('stty -a', { stdio: ['inherit', 'pipe', 'pipe'] }).toString(),
   env: { CI: process.env.CI, TERM: process.env.TERM, NO_COLOR: process.env.NO_COLOR,
     FORCE_COLOR: process.env.FORCE_COLOR, INK_DISABLE_INPUT: process.env.INK_DISABLE_INPUT,
-    secret: process.env.DROID_TEST_SECRET, explicit: process.env.DROID_EXPLICIT_VALUE } }));
+    secret: process.env.DROID_TEST_SECRET, explicit: process.env.DROID_EXPLICIT_VALUE,
+    factory: process.env.FACTORY_API_KEY, unrelated: process.env.UNRELATED_API_KEY } }));
 `, { mode: 0o755 });
-    const prompt = "line one\nline\ttwo\rquote' slash\\ $HOME $(touch sentinel) `touch sentinel`";
-    const result = await runFixture('capture', {
-      AGENT_FIXTURE_PATH: command, DROID_CWD: tempDir, DROID_PROMPT: prompt,
-      DROID_TEST_SECRET: 'non-secret-test-value',
+      const prompt = "line one\nline\ttwo\rquote' slash\\ $HOME $(touch sentinel) `touch sentinel`";
+      const result = await runFixture('capture', {
+        AGENT_FIXTURE_PATH: command, DROID_CWD: tempDir, DROID_PROMPT: prompt,
+        DROID_TEST_SECRET: 'non-secret-test-value',
+        DROID_AUTH_CASE: authCase, FACTORY_API_KEY: 'inherited-test-key',
+        UNRELATED_API_KEY: 'unrelated-test-key',
+      });
+      const captured = JSON.parse(result.stdout.trim());
+      expect(captured.args.slice(0, 3)).toEqual(['exec', '--default-flag', '--runtime-flag']);
+      expect(captured.args.at(-1)).toBe(prompt);
+      expect(captured.args.slice(-3, -1)).toEqual(['--cwd', tempDir]);
+      expect(captured.cwd).toBe(tempDir);
+      expect(captured.tty).toBe(true);
+      expect(captured.echo).toMatch(/(?:^|\s)-echo(?:\s|;)/);
+      expect(captured.env).toEqual({ CI: 'true', TERM: 'dumb', NO_COLOR: '1',
+        FORCE_COLOR: '0', INK_DISABLE_INPUT: '1', explicit: 'explicit',
+        ...(authCase === 'passthrough' ? { factory: 'inherited-test-key' } : {}),
+        ...(authCase === 'explicit' ? { factory: 'explicit-test-key' } : {}),
+      });
+      expect(await Bun.file(join(tempDir, 'sentinel')).exists()).toBe(false);
     });
-    const captured = JSON.parse(result.stdout.trim());
-    expect(captured.args.slice(0, 3)).toEqual(['exec', '--default-flag', '--runtime-flag']);
-    expect(captured.args.at(-1)).toBe(prompt);
-    expect(captured.args.slice(-3, -1)).toEqual(['--cwd', tempDir]);
-    expect(captured.cwd).toBe(tempDir);
-    expect(captured.tty).toBe(true);
-    expect(captured.echo).toMatch(/(?:^|\s)-echo(?:\s|;)/);
-    expect(captured.env).toEqual({ CI: 'true', TERM: 'dumb', NO_COLOR: '1',
-      FORCE_COLOR: '0', INK_DISABLE_INPUT: '1', explicit: 'explicit' });
-    expect(await Bun.file(join(tempDir, 'sentinel')).exists()).toBe(false);
-  });
+  }
 });

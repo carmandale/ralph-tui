@@ -17,7 +17,11 @@ if (!fixturePath) {
 }
 
 const agent = new DroidAgentPlugin();
-await agent.initialize({ command: fixturePath, defaultFlags: ['--default-flag'] });
+await agent.initialize({
+  command: fixturePath, defaultFlags: ['--default-flag'],
+  envExclude: process.env.DROID_AUTH_CASE ? ['FACTORY_API_KEY'] : [],
+  envPassthrough: process.env.DROID_AUTH_CASE === 'passthrough' ? ['FACTORY_API_KEY'] : [],
+});
 // Emulate direct Windows construction without claiming native Windows execution.
 if (process.env.DROID_DIRECT_LAUNCH === '1') {
   spyOn(os, 'platform').mockReturnValue('win32');
@@ -58,6 +62,9 @@ const handle = agent.execute(process.env.DROID_PROMPT ?? 'test prompt', [], {
     CI: 'false',
     DROID_FIXTURE_MODE: mode,
     DROID_FIXTURE_PATH: fixturePath,
+    ...(process.env.DROID_AUTH_CASE === 'explicit'
+      ? { FACTORY_API_KEY: 'explicit-test-key' }
+      : {}),
     ...(scriptFixturePath
       ? {
           PATH: `${dirname(scriptFixturePath)}:${process.env.PATH ?? ''}`,
