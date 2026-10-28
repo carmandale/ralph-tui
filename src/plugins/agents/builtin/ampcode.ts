@@ -1,12 +1,13 @@
 /**
  * ABOUTME: Ampcode agent plugin for the amp CLI.
  * Integrates with Ampcode AI coding assistant for AI-assisted coding.
- * Supports: execute mode, model selection, dangerously-allow-all mode,
+ * Supports: execute mode, mode selection, legacy dangerously-allow-all flag,
  * stream-json output, timeout, and graceful interruption.
  */
 
 import { execFile } from 'node:child_process';
 import { BaseAgentPlugin, findCommandPath } from '../base.js';
+import { processAgentEvents, processAgentEventsToSegments, type AgentDisplayEvent } from '../output-formatting.js';
 import type {
   AgentPluginMeta,
   AgentPluginFactory,
@@ -14,6 +15,7 @@ import type {
   AgentExecuteOptions,
   AgentSetupQuestion,
   AgentDetectResult,
+  AgentExecutionHandle,
 } from '../types.js';
 
 /**
@@ -53,9 +55,9 @@ export type JsonlParseResult =
  * - Auto-detects amp binary using `which`
  * - Executes in execute mode (-x) for non-interactive use
  * - Supports --dangerously-allow-all for autonomous operation
- * - Configurable mode selection (free, rush, smart)
+ * - Configurable mode selection, including custom Amp modes
  * - Stream JSON output for structured responses
- * - Timeout handling with graceful SIGINT before SIGTERM
+ * - Timeout and interruption handling through the shared agent lifecycle
  * - Streaming stdout/stderr capture
  */
 export class AmpcodeAgentPlugin extends BaseAgentPlugin {
@@ -74,12 +76,12 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
   };
 
   /** Output mode: text or stream-json */
-  private streamJson = false;
+  private streamJson = true;
 
-  /** Agent mode: free, rush, smart */
+  /** Agent mode; omitted to use the installed CLI's default */
   private mode?: string;
 
-  /** Allow all tool executions without confirmation (default: false for security) */
+  /** Legacy permission bypass flag; false does not restrict modern Amp's tools */
   private dangerouslyAllowAll = false;
 
   /** Timeout in milliseconds (0 = no timeout) */
@@ -92,11 +94,8 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
       this.streamJson = config.streamJson;
     }
 
-    if (
-      typeof config.mode === 'string' &&
-      ['free', 'rush', 'smart'].includes(config.mode)
-    ) {
-      this.mode = config.mode;
+    if (typeof config.mode === 'string' && config.mode.trim()) {
+      this.mode = config.mode.trim();
     }
 
     if (typeof config.dangerouslyAllowAll === 'boolean') {
@@ -134,10 +133,20 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
       };
     }
 
+    this.commandPath = findResult.path;
     return {
       available: true,
       version: versionResult.version,
       executablePath: findResult.path,
+    };
+  }
+
+  override getSandboxRequirements() {
+    return {
+      authPaths: ['~/.config/amp', '~/.local/share/amp'],
+      binaryPaths: ['/usr/local/bin', '~/.local/bin'],
+      runtimePaths: ['~/.bun', '~/.nvm'],
+      requiresNetwork: true,
     };
   }
 
@@ -148,25 +157,11 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
     command: string
   ): Promise<{ success: boolean; version?: string; error?: string }> {
     return new Promise((resolve) => {
-      let resolved = false;
-
-      // Timeout after 5 seconds
-      const timer = setTimeout(() => {
-        if (!resolved) {
-          resolved = true;
-          resolve({ success: false, error: 'Timeout waiting for --version' });
-        }
-      }, 5000);
-
-      execFile(command, ['--version'], (error, stdout, stderr) => {
-        clearTimeout(timer);
-        if (resolved) return;
-        resolved = true;
-
+      execFile(command, ['--version'], { timeout: 5000, killSignal: 'SIGKILL' }, (error, stdout, stderr) => {
         if (error) {
           resolve({
             success: false,
-            error: stderr || `Failed to execute: ${error.message}`,
+            error: error.killed ? 'Timeout waiting for --version' : stderr || `Failed to execute: ${error.message}`,
           });
           return;
         }
@@ -188,31 +183,26 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
       {
         id: 'mode',
         prompt: 'Agent mode:',
-        type: 'select',
-        choices: [
-          { value: 'smart', label: 'Smart', description: 'Balanced mode (default)' },
-          { value: 'free', label: 'Free', description: 'More creative, less constrained' },
-          { value: 'rush', label: 'Rush', description: 'Faster, more direct responses' },
-        ],
-        default: 'smart',
+        type: 'text',
+        default: '',
         required: false,
-        help: 'Controls the model, system prompt, and tool selection',
+        help: 'Leave empty for the CLI default. Amp supports low, medium, high, ultra, claude-code, and custom modes; older versions may use other names.',
       },
       {
         id: 'streamJson',
         prompt: 'Use stream JSON output?',
         type: 'boolean',
-        default: false,
+        default: true,
         required: false,
         help: 'Output in Claude Code-compatible stream JSON format',
       },
       {
         id: 'dangerouslyAllowAll',
-        prompt: '⚠️  Allow all tool executions without confirmation (autonomous mode)?',
+        prompt: 'Pass the legacy --dangerously-allow-all flag?',
         type: 'boolean',
         default: false,
         required: false,
-        help: 'Enable --dangerously-allow-all for autonomous operation. Warning: This bypasses all safety prompts.',
+        help: 'For older Amp versions only. Modern Amp runs tools without approval by default even when this is false. Use isolation or an Amp policy plugin to restrict tools.',
       },
     ];
   }
@@ -237,7 +227,7 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
       args.push('--mode', this.mode);
     }
 
-    // Allow all tool executions for autonomous operation
+    // Retain the opt-in bypass for Amp versions that support this legacy flag.
     if (this.dangerouslyAllowAll) {
       args.push('--dangerously-allow-all');
     }
@@ -261,17 +251,102 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
     return prompt;
   }
 
+  override execute(
+    prompt: string,
+    files?: AgentFileContext[],
+    options?: AgentExecuteOptions
+  ): AgentExecutionHandle {
+    if (!this.streamJson && !options?.subagentTracing) {
+      return super.execute(prompt, files, options);
+    }
+
+    const parser = AmpcodeAgentPlugin.createStreamingJsonlParser(false);
+    const emit = (results: JsonlParseResult[]) => {
+      for (const result of results) {
+        if (result.success) {
+          options?.onJsonlMessage?.(result.message.raw);
+        }
+        const events = result.success
+          ? AmpcodeAgentPlugin.toDisplayEvents(result.message.raw)
+          : result.raw.trim() ? [{ type: 'text' as const, content: result.raw }] : [];
+        if (events.length) {
+          options?.onStdout?.(processAgentEvents(events));
+          options?.onStdoutSegments?.(processAgentEventsToSegments(events));
+        }
+      }
+    };
+
+    return super.execute(prompt, files, {
+      ...options,
+      onStdoutSegments: undefined,
+      onStdout: (chunk) => emit(parser.push(chunk)),
+      onEnd: (result) => {
+        const parsed = AmpcodeAgentPlugin.parseJsonlOutput(result.stdout);
+        const failure = parsed.messages.find(({ raw }) => raw.type === 'result' && raw.is_error === true);
+        // The engine scans stdout for completion: never expose tool input, hidden
+        // content, or malformed protocol lines as assistant narrative.
+        if (failure && result.status === 'completed') {
+          result.status = 'failed';
+          result.error = typeof failure.raw.result === 'string' ? failure.raw.result : 'Amp execute failed';
+        }
+        result.stdout = result.status === 'completed'
+          ? parsed.messages.map(({ raw }) => AmpcodeAgentPlugin.completionText(raw)).join('\n')
+          : '';
+        emit(parser.flush());
+        options?.onEnd?.(result);
+      },
+    });
+  }
+
+  private static contentBlocks(raw: Record<string, unknown>): Record<string, unknown>[] {
+    const message = raw.message;
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return [];
+    const content = (message as Record<string, unknown>).content;
+    return Array.isArray(content)
+      ? content.filter((block): block is Record<string, unknown> => Boolean(block) && typeof block === 'object' && !Array.isArray(block))
+      : [];
+  }
+
+  private static completionText(raw: Record<string, unknown>): string {
+    if (raw.parent_tool_use_id) return '';
+    if (raw.type === 'assistant') {
+      return AmpcodeAgentPlugin.contentBlocks(raw)
+        .map((block) => block.type === 'text' && typeof block.text === 'string' ? block.text : '')
+        .join('\n');
+    }
+    if (raw.type === 'result' && raw.is_error !== true && raw.subtype === 'success' && typeof raw.result === 'string') {
+      return raw.result;
+    }
+    return '';
+  }
+
+  private static toDisplayEvents(raw: Record<string, unknown>): AgentDisplayEvent[] {
+    if (raw.type === 'result' && raw.is_error === true) {
+      return [{ type: 'error', message: typeof raw.result === 'string' ? raw.result : 'Amp execute failed' }];
+    }
+    const events: AgentDisplayEvent[] = [];
+    if (raw.type === 'assistant') {
+      for (const block of AmpcodeAgentPlugin.contentBlocks(raw)) {
+        if (block.type === 'text' && typeof block.text === 'string') {
+          events.push({ type: 'text', content: block.text });
+        } else if (block.type === 'tool_use' && typeof block.name === 'string') {
+          const input = block.input;
+          events.push({
+            type: 'tool_use',
+            name: block.name,
+            input: input && typeof input === 'object' && !Array.isArray(input) ? input as Record<string, unknown> : undefined,
+          });
+        }
+      }
+    }
+    return events;
+  }
+
   override async validateSetup(
     answers: Record<string, unknown>
   ): Promise<string | null> {
-    // Validate mode
-    const mode = answers.mode;
-    if (
-      mode !== undefined &&
-      mode !== '' &&
-      !['free', 'rush', 'smart'].includes(String(mode))
-    ) {
-      return 'Invalid mode. Must be one of: free, rush, smart';
+    if (answers.mode !== undefined && typeof answers.mode !== 'string') {
+      return 'Mode must be a string supported by your installed Amp CLI';
     }
 
     return null;
@@ -281,8 +356,7 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
    * Validate a model name for the Ampcode agent.
    */
   override validateModel(_model: string): string | null {
-    // Ampcode handles model selection via mode, not explicit model names
-    return null;
+    return _model ? 'Amp selects models via agentOptions.mode, not --model' : null;
   }
 
   /**
@@ -296,7 +370,11 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
     }
 
     try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+      const value: unknown = JSON.parse(trimmed);
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return { success: false, raw: line, error: 'Expected a JSON object' };
+      }
+      const parsed = value as Record<string, unknown>;
 
       const message: AmpcodeJsonlMessage = {
         raw: parsed,
@@ -310,17 +388,19 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
       }
       if (typeof parsed.sessionId === 'string') {
         message.sessionId = parsed.sessionId;
+      } else if (typeof parsed.session_id === 'string') {
+        message.sessionId = parsed.session_id;
       }
       if (parsed.result !== undefined) {
         message.result = parsed.result;
       }
 
-      if (parsed.tool && typeof parsed.tool === 'object') {
+      if (parsed.tool && typeof parsed.tool === 'object' && !Array.isArray(parsed.tool)) {
         const toolObj = parsed.tool as Record<string, unknown>;
         message.tool = {
           name: typeof toolObj.name === 'string' ? toolObj.name : undefined,
           input:
-            toolObj.input && typeof toolObj.input === 'object'
+            toolObj.input && typeof toolObj.input === 'object' && !Array.isArray(toolObj.input)
               ? (toolObj.input as Record<string, unknown>)
               : undefined,
         };
@@ -363,7 +443,7 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
   /**
    * Create a streaming JSONL parser.
    */
-  static createStreamingJsonlParser(): {
+  static createStreamingJsonlParser(retainHistory = true): {
     push: (chunk: string) => JsonlParseResult[];
     flush: () => JsonlParseResult[];
     getState: () => { messages: AmpcodeJsonlMessage[]; fallback: string[] };
@@ -385,9 +465,9 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
           const result = AmpcodeAgentPlugin.parseJsonlLine(line);
           results.push(result);
 
-          if (result.success) {
+          if (retainHistory && result.success) {
             messages.push(result.message);
-          } else if (result.raw.trim()) {
+          } else if (retainHistory && !result.success && result.raw.trim()) {
             fallback.push(result.raw);
           }
         }
@@ -404,9 +484,9 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
         const result = AmpcodeAgentPlugin.parseJsonlLine(buffer);
         buffer = '';
 
-        if (result.success) {
-          messages.push(result.message);
-        } else if (result.raw.trim()) {
+          if (retainHistory && result.success) {
+            messages.push(result.message);
+          } else if (retainHistory && !result.success && result.raw.trim()) {
           fallback.push(result.raw);
         }
 
