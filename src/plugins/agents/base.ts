@@ -174,6 +174,7 @@ interface RunningExecution {
   resolve: (result: AgentExecutionResult) => void;
   reject: (error: Error) => void;
   timeoutId?: ReturnType<typeof setTimeout>;
+  timedOut?: boolean;
   options?: AgentExecuteOptions;
   drainFallbackId?: ReturnType<typeof setTimeout>;
   exitCode?: number | null;
@@ -773,7 +774,8 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
       // Set up timeout if specified
       if (timeout > 0) {
         execution.timeoutId = setTimeout(() => {
-          if (this.executions.has(executionId)) {
+          if (this.executions.has(executionId) && execution.exitAt === undefined) {
+            execution.timedOut = true;
             proc.kill('SIGTERM');
             // Give it 5 seconds to terminate gracefully
             setTimeout(() => {
@@ -914,8 +916,11 @@ export abstract class BaseAgentPlugin implements AgentPlugin {
     if (execution.interrupted) {
       return 'interrupted';
     }
+    if (execution.timedOut) {
+      return 'timeout';
+    }
     if (signal === 'SIGTERM' || signal === 'SIGKILL') {
-      return execution.timeoutId ? 'timeout' : 'interrupted';
+      return 'interrupted';
     }
     return code === 0 ? 'completed' : 'failed';
   }
