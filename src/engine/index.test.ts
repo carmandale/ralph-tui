@@ -15,6 +15,7 @@ import type { RalphConfig } from '../config/types.js';
 import { ExecutionEngine } from './index.js';
 import { Worker } from '../parallel/worker.js';
 import { resolveWorkerProgressFile } from '../logs/progress.js';
+import { resolve } from 'node:path';
 
 /**
  * Creates a minimal mock tracker for testing.
@@ -140,6 +141,7 @@ describe('ExecutionEngine', () => {
       if (!registry.hasPlugin('engine-test-agent')) registry.registerBuiltin(createMockAgent);
       const config = createMockConfig();
       config.progressFile = progressFile;
+      config.promptTemplate = resolve(import.meta.dir, '../plugins/trackers/builtin/json/template.hbs');
       config.agent = {
         name: 'engine-test-agent', plugin: 'engine-test-agent', options: { customOption: 'preserved' },
       };
@@ -159,6 +161,7 @@ describe('ExecutionEngine', () => {
       const preview = await engine.generatePromptPreview(task.id);
       expect(preview.success).toBe(true);
       if (preview.success) {
+        expect(preview.source).toBe(config.promptTemplate);
         expect(preview.prompt).toContain('APPEND to `.ralph-tui/progress.md`');
         expect(preview.prompt).toContain('Study `.ralph-tui/progress.md`');
       }

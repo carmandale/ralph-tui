@@ -5,6 +5,7 @@
  */
 
 import { readFile, writeFile, appendFile, access, constants } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import type { RalphConfig } from '../config/types.js';
 import { resolveProgressFile, resolveWorkerProgressFile } from '../logs/progress.js';
 import type { TrackerPlugin, TrackerTask } from '../plugins/trackers/types.js';
@@ -1025,7 +1026,7 @@ export class ParallelExecutor {
     const workerProgressPath = resolveWorkerProgressFile(workerResult.worktreePath);
     const mainProgressPath = resolveProgressFile(this.baseConfig);
 
-    if (workerProgressPath === mainProgressPath) return;
+    if (resolve(workerProgressPath) === resolve(mainProgressPath)) return;
 
     try {
       // Check if worker's progress file exists

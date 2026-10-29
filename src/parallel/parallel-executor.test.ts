@@ -383,13 +383,13 @@ describe('ParallelExecutor class', () => {
       }
     });
 
-    test('does not duplicate when main progress resolves to a worker file', async () => {
+    test.each([false, true])('does not duplicate a worker file with redundant path=%j', async (redundant) => {
       const root = join('/tmp', `ralph-progress-shared-${randomUUID()}`);
       const workerCwd = join(root, 'worker');
       const sharedProgressPath = resolveWorkerProgressFile(workerCwd);
       const config = createMockConfig({
         cwd: join(root, 'main'),
-        progressFile: sharedProgressPath,
+        progressFile: redundant ? `${workerCwd}/.ralph-tui/../.ralph-tui/progress.md` : sharedProgressPath,
       });
       const executor = new ParallelExecutor(config, createMockTracker());
 
