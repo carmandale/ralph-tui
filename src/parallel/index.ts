@@ -74,6 +74,7 @@ export class ParallelExecutor {
   private currentGroupIndex = 0;
   private activeWorkers: Worker[] = [];
   private completedResults: WorkerResult[] = [];
+  private readonly mergedProgressResults = new WeakSet<WorkerResult>();
   private totalTasksCompleted = 0;
   private totalTasksFailed = 0;
   private totalMergesCompleted = 0;
@@ -1019,7 +1020,7 @@ export class ParallelExecutor {
    * This allows learnings from completed tasks to be visible to subsequent workers.
    */
   private async mergeProgressFile(workerResult: WorkerResult): Promise<void> {
-    if (!workerResult.worktreePath) return;
+    if (!workerResult.worktreePath || this.mergedProgressResults.has(workerResult)) return;
 
     const workerProgressPath = resolveWorkerProgressFile(workerResult.worktreePath);
     const mainProgressPath = resolveProgressFile(this.baseConfig);
@@ -1037,6 +1038,7 @@ export class ParallelExecutor {
       // Append to main progress file with a separator
       const separator = `\n\n---\n\n## Parallel Task: ${workerResult.task.title} (${workerResult.task.id})\n\n`;
       await appendFile(mainProgressPath, separator + workerProgress);
+      this.mergedProgressResults.add(workerResult);
     } catch {
       // Silently ignore if worker progress file doesn't exist or can't be read
     }

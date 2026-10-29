@@ -30,6 +30,8 @@ export function resolveProgressFile(location: ProgressLocation): string {
 
 /**
  * Resolve a worker's isolated, gitignored progress file in its worktree.
+ * Configured paths apply to the main destination, never to parallel workers:
+ * absolute and parent-relative paths could otherwise be shared across worktrees.
  */
 export function resolveWorkerProgressFile(worktreePath: string): string {
   return join(worktreePath, PROGRESS_FILE);

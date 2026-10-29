@@ -89,6 +89,7 @@ export class Worker {
       cwd: this.config.worktreePath,
       maxIterations: this.maxIterations,
       outputDir: `${this.config.worktreePath}/.ralph-tui/iterations`,
+      // Keep both progress reads and prompt instructions local to this worker.
       progressFile: resolveWorkerProgressFile(this.config.worktreePath),
       sessionId: `${baseConfig.sessionId ?? 'session'}-${this.id}`,
       // Force auto-commit in parallel mode — required for merge workflow to work.

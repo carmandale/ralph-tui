@@ -3744,19 +3744,6 @@ export async function executeRunCommand(args: string[]): Promise<void> {
       config.tracker.options.epicIds = config.epicIds;
       executionScopes = session.executionScopes ?? executionScopes;
     }
-  } else {
-    if (options.resetProgress) {
-      await clearProgress(config);
-    }
-    try {
-      if (!options.resetProgress) {
-        await ensureProgressFile(config);
-      }
-      await appendProgressSessionMarker(config, newSessionId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`Warning: Failed to update progress file: ${message}`);
-    }
   }
 
   trackerForRun = trackerForRun ?? await trackerRegistry.getInstance(config.tracker);
@@ -4050,7 +4037,6 @@ export async function executeRunCommand(args: string[]): Promise<void> {
     }
 
     if (useParallel) {
-      // Parallel execution path
       const parallelPreflight = checkParallelGitPreflight(config.cwd);
       if (!parallelPreflight.ok) {
         const details = parallelPreflight.errors.map((error) => `- ${error}`).join('\n');
@@ -4058,6 +4044,26 @@ export async function executeRunCommand(args: string[]): Promise<void> {
           `Parallel preflight failed:\n${details}\nRun with --serial or fix git state and retry.`
         );
       }
+    }
+
+    // Validate user git state before our session marker dirties a tracked progress file.
+    if (!(options.resume && sessionCheck.hasSession)) {
+      if (options.resetProgress) {
+        await clearProgress(config);
+      }
+      try {
+        if (!options.resetProgress) {
+          await ensureProgressFile(config);
+        }
+        await appendProgressSessionMarker(config, newSessionId);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`Warning: Failed to update progress file: ${message}`);
+      }
+    }
+
+    if (useParallel) {
+      // Parallel execution path
 
       let maxWorkers = typeof options.parallel === 'number'
         ? options.parallel

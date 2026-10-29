@@ -250,7 +250,34 @@ Completed fifth task.
       expect(resolveProgressFile({ cwd: testDir, progressFile: absolutePath })).toBe(
         absolutePath
       );
+      for (const progressFile of ['', '   ', '\t\n']) {
+        expect(resolveProgressFile({ cwd: testDir, progressFile })).toBe(
+          join(testDir, PROGRESS_FILE)
+        );
+      }
+      expect(resolveProgressFile({ cwd: join(testDir, 'project'), progressFile: '../notes.md' }))
+        .toBe(join(testDir, 'notes.md'));
     });
+
+    test.each(['nested/progress.md', '../outside/progress.md'])
+      ('preserves history, reads context and resets only %s', async (progressFile) => {
+        const location = { cwd: join(testDir, 'project'), progressFile };
+        const customPath = resolveProgressFile(location);
+        const defaultPath = resolveProgressFile({ cwd: location.cwd });
+        await mkdir(join(location.cwd, '.ralph-tui'), { recursive: true });
+        await mkdir(join(customPath, '..'), { recursive: true });
+        await writeFile(defaultPath, 'untouched default');
+        const history = '## ✓ Iteration 1 - prior: Preserved context\nPrior learnings.\n';
+        await writeFile(customPath, history);
+        await ensureProgressFile(location);
+        expect(await readProgress(location)).toBe(history);
+        await appendProgressSessionMarker(location, 'next-session');
+        expect(await getRecentProgressSummary(location)).toContain('Prior learnings.');
+        expect(await readProgress(location)).toStartWith(history);
+        await clearProgress(location);
+        expect(await readProgress(location)).not.toContain('Prior learnings.');
+        expect(await readFile(defaultPath, 'utf-8')).toBe('untouched default');
+      });
 
     test('uses a custom path for all file operations without touching the default', async () => {
       const location = { cwd: testDir, progressFile: 'custom/nested/progress.md' };
