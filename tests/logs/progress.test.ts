@@ -5,7 +5,7 @@
 
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdir, rm, writeFile, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   readProgress,
   getRecentProgressSummary,
@@ -16,6 +16,7 @@ import {
   ensureProgressFile,
   appendProgressSessionMarker,
   resolveProgressFile,
+  resolveWorkerProgressFile,
 } from '../../src/logs/progress.js';
 
 describe('progress.ts', () => {
@@ -258,6 +259,14 @@ Completed fifth task.
       expect(resolveProgressFile({ cwd: join(testDir, 'project'), progressFile: '../notes.md' }))
         .toBe(join(testDir, 'notes.md'));
     });
+
+    test.each(['worktrees/worker', join(testDir, 'worker')])
+      ('resolves worker progress only once for worktree %s', (worktreePath) => {
+        const progressFile = resolveWorkerProgressFile(worktreePath);
+        const expectedPath = resolve(worktreePath, PROGRESS_FILE);
+        expect(progressFile).toBe(expectedPath);
+        expect(resolveProgressFile({ cwd: worktreePath, progressFile })).toBe(expectedPath);
+      });
 
     test.each(['nested/progress.md', '../outside/progress.md'])
       ('preserves history, reads context and resets only %s', async (progressFile) => {

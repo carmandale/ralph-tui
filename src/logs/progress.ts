@@ -5,7 +5,7 @@
  */
 
 import { readFile, writeFile, appendFile, mkdir } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 /**
  * Default path for the progress file (relative to cwd).
@@ -34,7 +34,7 @@ export function resolveProgressFile(location: ProgressLocation): string {
  * absolute and parent-relative paths could otherwise be shared across worktrees.
  */
 export function resolveWorkerProgressFile(worktreePath: string): string {
-  return join(worktreePath, PROGRESS_FILE);
+  return resolve(worktreePath, PROGRESS_FILE);
 }
 
 /**
