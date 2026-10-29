@@ -7,7 +7,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { analyzeTaskGraph, shouldRunParallel } from './task-graph.js';
@@ -383,19 +383,24 @@ describe('ParallelExecutor class', () => {
       }
     });
 
-    test.each([false, true])('does not duplicate a worker file with redundant path=%j', async (redundant) => {
+    test.each(['exact', 'redundant', 'symlink', 'hardlink'])('does not duplicate a worker file through %s alias', async (alias) => {
       const root = join('/tmp', `ralph-progress-shared-${randomUUID()}`);
       const workerCwd = join(root, 'worker');
       const sharedProgressPath = resolveWorkerProgressFile(workerCwd);
+      const mainProgressPath = alias === 'redundant'
+        ? `${workerCwd}/.ralph-tui/../.ralph-tui/progress.md`
+        : alias === 'exact' ? sharedProgressPath : join(root, 'main.md');
       const config = createMockConfig({
         cwd: join(root, 'main'),
-        progressFile: redundant ? `${workerCwd}/.ralph-tui/../.ralph-tui/progress.md` : sharedProgressPath,
+        progressFile: mainProgressPath,
       });
       const executor = new ParallelExecutor(config, createMockTracker());
 
       try {
         await mkdir(join(workerCwd, '.ralph-tui'), { recursive: true });
         await writeFile(sharedProgressPath, 'shared progress');
+        if (alias === 'symlink') await symlink(sharedProgressPath, mainProgressPath);
+        if (alias === 'hardlink') await link(sharedProgressPath, mainProgressPath);
 
         await (executor as unknown as ParallelExecutorWithProgressMerge).mergeProgressFile(
           createWorkerResult(task('T1'), { worktreePath: workerCwd })
@@ -407,7 +412,7 @@ describe('ParallelExecutor class', () => {
       }
     });
 
-    test('merges an isolated worker file into a custom main progress path', async () => {
+    test.each([false, true])('merges into a custom main progress path with existing destination=%j', async (existing) => {
       const root = join('/tmp', `ralph-progress-custom-${randomUUID()}`);
       const mainCwd = join(root, 'main');
       const workerCwd = join(root, 'worker');
@@ -423,14 +428,14 @@ describe('ParallelExecutor class', () => {
         await mkdir(join(workerCwd, '.ralph-tui'), { recursive: true });
         await mkdir(join(mainCwd, 'notes'), { recursive: true });
         await writeFile(workerProgressPath, 'worker learnings');
-        await writeFile(mainProgressPath, 'main progress');
+        if (existing) await writeFile(mainProgressPath, 'main progress');
 
         await (executor as unknown as ParallelExecutorWithProgressMerge).mergeProgressFile(
           createWorkerResult(task('T1'), { worktreePath: workerCwd })
         );
 
         const merged = await readFile(mainProgressPath, 'utf-8');
-        expect(merged).toContain('main progress');
+        expect(merged).toStartWith(existing ? 'main progress' : '\n\n---\n\n');
         expect(merged).toContain('## Parallel Task: Task T1 (T1)');
         expect(merged).toContain('worker learnings');
       } finally {

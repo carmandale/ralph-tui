@@ -4,7 +4,7 @@
  * git worktrees, and merges results back sequentially with conflict resolution.
  */
 
-import { readFile, writeFile, appendFile, access, constants } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, access, constants, stat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import type { RalphConfig } from '../config/types.js';
 import { resolveProgressFile, resolveWorkerProgressFile } from '../logs/progress.js';
@@ -1031,6 +1031,15 @@ export class ParallelExecutor {
     try {
       // Check if worker's progress file exists
       await access(workerProgressPath, constants.R_OK);
+
+      const [workerInfo, mainInfo] = await Promise.all([
+        stat(workerProgressPath, { bigint: true }),
+        stat(mainProgressPath, { bigint: true }).catch(() => null),
+      ]);
+      if (
+        mainInfo && workerInfo.ino !== 0n &&
+        workerInfo.dev === mainInfo.dev && workerInfo.ino === mainInfo.ino
+      ) return;
 
       // Read the worker's progress content
       const workerProgress = await readFile(workerProgressPath, 'utf-8');
