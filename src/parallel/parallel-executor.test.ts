@@ -7,7 +7,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { link, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { analyzeTaskGraph, shouldRunParallel } from './task-graph.js';
@@ -19,6 +19,26 @@ import type { AiResolverCallback } from './conflict-resolver.js';
 import type { MergeOperation, WorkerResult, TaskGraphAnalysis } from './types.js';
 import { resolveProgressFile, resolveWorkerProgressFile } from '../logs/progress.js';
 import { tmpdir } from 'node:os';
+
+async function canCreateSymlinks(): Promise<boolean> {
+  const root = await mkdtemp(join(tmpdir(), 'ralph-symlink-capability-'));
+  try {
+    const target = join(root, 'target');
+    await writeFile(target, 'probe');
+    try {
+      await symlink(target, join(root, 'link'));
+      return true;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'EPERM' || code === 'EACCES') return false;
+      throw error;
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
+const symlinksAvailable = await canCreateSymlinks();
 
 /**
  * Helper to create a minimal TrackerTask.
@@ -383,8 +403,8 @@ describe('ParallelExecutor class', () => {
       }
     });
 
-    test.each(['exact', 'redundant', 'symlink', 'hardlink'])('does not duplicate a worker file through %s alias', async (alias) => {
-      const root = join('/tmp', `ralph-progress-shared-${randomUUID()}`);
+    const assertProgressAliasUnchanged = async (alias: string) => {
+      const root = join(tmpdir(), `ralph-progress-shared-${randomUUID()}`);
       const workerCwd = join(root, 'worker');
       const sharedProgressPath = resolveWorkerProgressFile(workerCwd);
       const mainProgressPath = alias === 'redundant'
@@ -410,7 +430,14 @@ describe('ParallelExecutor class', () => {
       } finally {
         await rm(root, { recursive: true, force: true });
       }
-    });
+    };
+
+    for (const alias of ['exact', 'redundant', 'symlink', 'hardlink']) {
+      test.skipIf(alias === 'symlink' && !symlinksAvailable)(
+        `does not duplicate a worker file through ${alias} alias`,
+        () => assertProgressAliasUnchanged(alias)
+      );
+    }
 
     test.each([false, true])('merges into a custom main progress path with existing destination=%j', async (existing) => {
       const root = join('/tmp', `ralph-progress-custom-${randomUUID()}`);
