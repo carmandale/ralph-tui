@@ -20,6 +20,7 @@ interface Settings {
   probeCode?: number;
   probeBySince?: Record<string, string>;
   envelope?: boolean;
+  context?: Record<string, unknown>;
   stream?: Stream;
   streamBySince?: Record<string, Stream>;
 }
@@ -36,7 +37,8 @@ if (args.includes('--version')) {
 } else if (args[0] === 'context') {
   const context = {
     beads_dir: settings.beadsDir ?? process.cwd(), backend: 'dolt',
-    database: settings.database ?? 'beads', dolt_mode: 'server', server_port: 3307,
+    database: settings.database ?? 'beads', dolt_mode: 'embedded', project_id: 'fixture-project',
+    ...settings.context,
   };
   console.log(JSON.stringify(settings.envelope ? { schema_version: 1, data: context } : context));
 } else if (args[0] === 'branch') {

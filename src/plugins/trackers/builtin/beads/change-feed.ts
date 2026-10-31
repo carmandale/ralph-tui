@@ -4,6 +4,7 @@
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
+import { isAbsolute, resolve } from 'node:path';
 import { unwrapBeadsEnvelope } from '../../beads-json.js';
 
 const MAX_OUTPUT = 1024 * 1024;
@@ -32,6 +33,10 @@ function object(value: unknown): value is Record<string, unknown> {
 
 function sequence(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function nonEmpty(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 /** A follower belongs to one subscription lifetime, not a persisted tracker cache. */
@@ -125,13 +130,22 @@ export class BeadsChangeFeed {
     try {
       const c = unwrapBeadsEnvelope(JSON.parse(context.stdout));
       const b = unwrapBeadsEnvelope(JSON.parse(branch.stdout));
-      if (!object(c) || !object(b) || typeof c.beads_dir !== 'string' ||
-          !c.beads_dir || typeof c.database !== 'string' || !c.database ||
-          c.backend !== 'dolt' || typeof c.dolt_mode !== 'string' ||
-          typeof b.current !== 'string' || !b.current) return;
+      if (!object(c) || !object(b) || !nonEmpty(c.beads_dir) || !isAbsolute(c.beads_dir) ||
+          !nonEmpty(c.database) || !nonEmpty(c.project_id) || c.backend !== 'dolt' ||
+          !nonEmpty(b.current) || (c.data_dir !== undefined && !nonEmpty(c.data_dir))) return;
+      let store: unknown[];
+      if (c.dolt_mode === 'embedded') {
+        store = [resolve(c.beads_dir, nonEmpty(c.data_dir) ? c.data_dir : 'dolt')];
+      } else if (c.dolt_mode === 'server') {
+        if (!nonEmpty(c.server_host) || !sequence(c.server_port) ||
+            c.server_port < 1 || c.server_port > 65535) return;
+        store = [c.server_host, c.server_port, c.data_dir];
+      } else if (c.dolt_mode === 'proxied-server') {
+        if (!nonEmpty(c.proxied_dir) || !isAbsolute(c.proxied_dir)) return;
+        store = [c.proxied_dir, c.data_dir];
+      } else return;
       return JSON.stringify([
-        c.beads_dir, c.backend, c.dolt_mode, c.server_host, c.server_port,
-        c.database, c.data_dir, c.proxied_dir, c.project_id, b.current,
+        c.beads_dir, c.backend, c.dolt_mode, c.database, c.project_id, b.current, store,
       ]);
     } catch { return; }
   }

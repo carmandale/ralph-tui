@@ -185,6 +185,42 @@ describe('native bd change feed (real CLI)', () => {
     expect(changes).toBe(0);
   });
 
+  test.each([
+    { dolt_mode: 'unknown' }, { project_id: '' }, { project_id: null },
+    { beads_dir: 'relative/store' }, { data_dir: {} },
+    { dolt_mode: 'server', server_port: 3307 },
+    { dolt_mode: 'server', server_host: '127.0.0.1' },
+    { dolt_mode: 'server', server_host: '127.0.0.1', server_port: 0 },
+    { dolt_mode: 'proxied-server' },
+  ])('falls back on unverifiable native scope (%#)', async (context) => {
+    await configure({ context });
+    start();
+    await (feed as unknown as { run: Promise<void> }).run;
+    expect(await followers()).toHaveLength(0);
+  });
+
+  test.each(['server', 'proxied-server'])('accepts a complete %s identity', async (mode) => {
+    await configure({ context: {
+      dolt_mode: mode, server_host: '127.0.0.1', server_port: 3307, proxied_dir: cwd,
+    }, stream: { parts: [event(1)] } });
+    start();
+    await until(() => (feed as unknown as { cursor: number }).cursor === 1);
+    expect(await followers()).toHaveLength(1);
+  });
+
+  test('resets a cursor when the server endpoint changes at the same workspace path', async () => {
+    const settings = (host: string): Record<string, unknown> => ({
+      context: { dolt_mode: 'server', server_host: host, server_port: 3307 },
+      streamBySince: { '0': { parts: [event(3)] } },
+    });
+    await configure(settings('one.example'));
+    start({ scopeIntervalMs: 50 });
+    await until(() => (feed as unknown as { cursor: number }).cursor === 3);
+    await configure(settings('two.example'));
+    await until(async () => (await followers()).length === 2);
+    expect((await followers()).map((c) => c.since)).toEqual(['0', '0']);
+  });
+
   test('disposal cancels a pending retry', async () => {
     await configure({ stream: { exit: true } });
     start({ retryMs: 5000 });
