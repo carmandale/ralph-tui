@@ -109,6 +109,19 @@ describe('native bd change feed (real CLI)', () => {
     expect(await followers()).toHaveLength(0);
   });
 
+  test('accepts enveloped follow records and truncation notifications', async () => {
+    const envelope = (value: string): string => JSON.stringify({
+      schema_version: 1, data: JSON.parse(value),
+    }) + '\n';
+    await configure({ probe: event(1), probeBySince: { '9': '' }, streamBySince: {
+      '1': { parts: [envelope(event(2)), envelope(gap())] },
+      '9': { parts: [envelope(event(10))] },
+    } });
+    start();
+    await until(() => (feed as unknown as { cursor: number }).cursor === 10);
+    expect((await followers()).map((c) => c.since)).toEqual(['1', '9']);
+  });
+
   test.each(['not json\n', 'x'.repeat(1024 * 1024 + 1),
     event(Number.MAX_SAFE_INTEGER + 1), '{}\n', event(2) + event(1)])('rejects invalid streams without reconnecting (%#)', async (data) => {
     await configure({ stream: { parts: [data] } });

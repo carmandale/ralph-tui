@@ -262,7 +262,7 @@ export class BeadsChangeFeed {
             if (line !== '}') continue;
           }
           try {
-            const value: unknown = JSON.parse(pretty || line);
+            const value = unwrapBeadsEnvelope(JSON.parse(pretty || line));
             pretty = '';
             if (this.truncated(value)) { stop('retry'); return; }
             this.record(value);
