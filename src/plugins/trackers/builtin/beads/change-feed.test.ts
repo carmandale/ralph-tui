@@ -148,6 +148,14 @@ describe('native bd change feed (real CLI)', () => {
     expect(await followers()).toHaveLength(5);
   });
 
+  test('does not accumulate fast-failure counts across healthy idle streams', async () => {
+    await configure({ stream: { parts: [''], intervalMs: 30, exit: true } });
+    start({ healthyStreamMs: 20 });
+    await until(async () => (await followers()).length >= 6);
+    await feed.dispose();
+    expect((feed as unknown as { cursor: number }).cursor).toBe(0);
+  });
+
   test('invalidates and rebaselines a pruned initial journal without skipping its retained suffix', async () => {
     await configure({ probeBySince: { '0': gap() }, streamBySince: { '9': { parts: [event(10)] } } });
     start();

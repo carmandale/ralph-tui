@@ -25,6 +25,7 @@ interface FeedOptions {
   commandTimeoutMs?: number;
   retryMs?: number;
   scopeIntervalMs?: number;
+  healthyStreamMs?: number;
 }
 
 function object(value: unknown): value is Record<string, unknown> {
@@ -210,13 +211,16 @@ export class BeadsChangeFeed {
       }
       if (this.stopped) return;
       const before = this.cursor;
+      const startedAt = performance.now();
       const result = await this.stream(scope);
       if (result === 'fallback' || this.stopped) return;
       if (result === 'scope') {
         this.scope = undefined;
         continue;
       }
-      failures = this.cursor > before ? 0 : failures + 1;
+      const healthy = this.cursor > before ||
+        performance.now() - startedAt >= (this.options.healthyStreamMs ?? 60_000);
+      failures = healthy ? 0 : failures + 1;
       if (failures >= 5) return;
       await new Promise<void>((resolve) => {
         const done = (): void => {
