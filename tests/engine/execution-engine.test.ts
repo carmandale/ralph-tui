@@ -1747,6 +1747,86 @@ describe('ExecutionEngine', () => {
       await Promise.all([first, second]);
     });
 
+    test('concurrent disposal awaits cleanup already started by a failed baseline', async () => {
+      engine = new ExecutionEngine(createTestConfig({ watch: true }));
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      let cleaning = false;
+      mockTrackerInstance.subscribeChanges = () => async () => {
+        cleaning = true;
+        await gate;
+      };
+      (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => []);
+      await engine.initialize();
+      (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => {
+        throw new Error('baseline failed');
+      });
+      const run = engine.start().catch(() => {});
+      await until(() => cleaning);
+      let disposed = false;
+      const disposal = engine.dispose().then(() => { disposed = true; });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(disposed).toBe(false);
+      release();
+      await Promise.all([disposal, run]);
+      expect(disposed).toBe(true);
+    });
+
+    test('continued watch execution reinstalls its change subscription', async () => {
+      engine = new ExecutionEngine(createTestConfig({ watch: true, pollIntervalMs: 30_000 }));
+      let notify!: () => void;
+      const unsubscribe = mock(async () => {});
+      mockTrackerInstance.subscribeChanges = mock((listener: () => void) => {
+        notify = listener;
+        return unsubscribe;
+      });
+      const getTasks = mock(async () => []);
+      mockTrackerInstance.getTasks = getTasks;
+      mockTrackerInstance.isComplete = mock(async () => true);
+      await engine.initialize();
+      const first = engine.start();
+      await until(() => engine.getStatus() === 'waiting');
+      await engine.stop();
+      await first;
+      const resumed = engine.continueExecution();
+      await until(() => engine.getStatus() === 'waiting');
+      const reads = getTasks.mock.calls.length;
+      notify();
+      await until(() => getTasks.mock.calls.length > reads);
+      await engine.stop();
+      await resumed;
+      expect(mockTrackerInstance.subscribeChanges).toHaveBeenCalledTimes(2);
+      expect(unsubscribe).toHaveBeenCalledTimes(2);
+    });
+
+    test('retains an invalidation when pause interrupts its idle wakeup', async () => {
+      engine = new ExecutionEngine(createTestConfig({ watch: true, pollIntervalMs: 30_000 }));
+      let notify!: () => void;
+      mockTrackerInstance.subscribeChanges = (listener) => {
+        notify = listener;
+        return async () => {};
+      };
+      const getTasks = mock(async () => []);
+      mockTrackerInstance.getTasks = getTasks;
+      mockTrackerInstance.isComplete = mock(async () => true);
+      let paused = false;
+      engine.on((event) => {
+        if (event.type === 'engine:waiting' && !paused) {
+          paused = true;
+          notify();
+          engine.pause();
+        }
+      });
+      await engine.initialize();
+      const run = engine.start();
+      await until(() => engine.getStatus() === 'paused');
+      const reads = getTasks.mock.calls.length;
+      engine.resume();
+      await until(() => getTasks.mock.calls.length > reads);
+      await engine.stop();
+      await run;
+    });
+
     test('reports waiting while idle and running when an iteration starts', async () => {
       engine = new ExecutionEngine(
         createTestConfig({ watch: true, pollIntervalMs: 20, maxIterations: 1 })

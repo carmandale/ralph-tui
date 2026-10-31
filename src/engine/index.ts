@@ -274,6 +274,7 @@ export class ExecutionEngine {
   private trackerChangePending = false;
   private wakeWatch: (() => void) | undefined;
   private unsubscribeTrackerChanges: (() => Promise<void>) | undefined;
+  private trackerChangesCleanup: Promise<void> = Promise.resolve();
   private taskRefresh: Promise<void> | undefined;
   /** Track retry attempts per task */
   private retryCountMap: Map<string, number> = new Map();
@@ -569,13 +570,7 @@ export class ExecutionEngine {
     this.watchingIdle = false;
 
     try {
-      if (this.config.watch) {
-        this.unsubscribeTrackerChanges = this.tracker.subscribeChanges?.(() => {
-          if (this.shouldStop) return;
-          this.trackerChangePending = true;
-          this.wakeWatch?.();
-        });
-      }
+      this.startTrackerChanges();
 
       // Fetch all tasks including completed for TUI display
       // Open/in_progress tasks are actionable; completed tasks are for historical view
@@ -1858,8 +1853,10 @@ export class ExecutionEngine {
     });
 
     try {
+      this.startTrackerChanges();
       await this.runLoop();
     } finally {
+      await this.stopTrackerChanges();
       this.state.status = 'idle';
     }
   }
@@ -1901,13 +1898,26 @@ export class ExecutionEngine {
       });
       remainingMs -= delayMs;
     }
+    if (!this.shouldStop && this.state.status !== 'pausing') {
+      this.trackerChangePending = false;
+    }
+  }
+
+  private startTrackerChanges(): void {
+    if (!this.config.watch || this.unsubscribeTrackerChanges) return;
     this.trackerChangePending = false;
+    this.unsubscribeTrackerChanges = this.tracker?.subscribeChanges?.(() => {
+      if (this.shouldStop) return;
+      this.trackerChangePending = true;
+      this.wakeWatch?.();
+    });
   }
 
   private async stopTrackerChanges(): Promise<void> {
     const unsubscribe = this.unsubscribeTrackerChanges;
     this.unsubscribeTrackerChanges = undefined;
-    await unsubscribe?.();
+    if (unsubscribe) this.trackerChangesCleanup = unsubscribe();
+    await this.trackerChangesCleanup;
   }
 
   /**
