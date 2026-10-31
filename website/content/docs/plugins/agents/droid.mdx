@@ -22,7 +22,15 @@ Install the Factory Droid CLI and authenticate:
 droid --version
 ```
 
-Set `FACTORY_API_KEY` in your environment (or run `droid auth`).
+Use Droid's stored login (`droid auth`), or set `FACTORY_API_KEY` in your environment and explicitly allow Ralph TUI to pass it to Droid:
+
+```toml
+# .ralph-tui/config.toml
+agent = "droid"
+envPassthrough = ["FACTORY_API_KEY"]
+```
+
+Ralph TUI filters inherited `*_API_KEY` variables by default. Setting the key in your shell alone is not sufficient; `envPassthrough` opts this specific key into the agent environment. For a full `[[agents]]` configuration, put `envPassthrough` alongside `name` and `plugin`, not inside `[agents.options]`. See [environment filtering](/docs/configuration/options#envpassthrough-allowing-specific-variables) for exclusion and passthrough precedence.
 
 ## Basic Usage
 
@@ -141,7 +149,7 @@ which droid
 
 ### "Authentication failed"
 
-Set `FACTORY_API_KEY` or run `droid auth`.
+Run `droid auth`, or verify both that `FACTORY_API_KEY` is set and that the selected agent has `envPassthrough = ["FACTORY_API_KEY"]` configured. Other API keys remain filtered unless explicitly allowed.
 
 ### "Tracing not showing"
 
