@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { buildDroidCommandArgs, getDroidOutputFormat } from './commandBuilder.js';
 import { DroidAgentPlugin } from './index.js';
 import { BaseAgentPlugin } from '../base.js';
+import { AgentRegistry } from '../registry.js';
 import { DroidAgentConfigSchema } from './schema.js';
 import type { AgentExecuteOptions } from '../types.js';
 import { mkdtemp, writeFile, readFile, chmod, rm } from 'node:fs/promises';
@@ -57,6 +58,30 @@ describe('Droid output format contract', () => {
       expect(plugin.args('task').slice(0, 3)).toEqual(['exec', '--output-format', outputFormat]);
     }
   });
+
+  test.each(['', 'future', 'stream-jsonrpc', null, []])(
+    'rejects invalid outputFormat %j before becoming ready or cacheable', async (outputFormat) => {
+      const plugin = new TestDroid();
+      await expect(plugin.initialize({ outputFormat, skipPermissions: false })).rejects.toThrow('outputFormat');
+      expect(await plugin.isReady()).toBe(false);
+
+      AgentRegistry.resetInstance();
+      const registry = AgentRegistry.getInstance();
+      registry.registerBuiltin(() => new TestDroid());
+      const config = { name: 'format-validation', plugin: 'droid', options: { outputFormat, skipPermissions: false } };
+      try {
+        await expect(registry.getInstance(config)).rejects.toThrow('outputFormat');
+        const corrected = await registry.getInstance({
+          ...config, options: { outputFormat: 'text', skipPermissions: false },
+        }) as TestDroid;
+        expect(corrected.args('task')).toEqual(['exec', '--output-format', 'text', '--cwd', process.cwd(), 'task']);
+        expect(await registry.getInstance(config)).toBe(corrected);
+      } finally {
+        await registry.disposeAll();
+        AgentRegistry.resetInstance();
+      }
+    },
+  );
 
   test.each([true, false])('does not derive output format from tracing: %s', async (enableTracing) => {
     const plugin = new TestDroid();

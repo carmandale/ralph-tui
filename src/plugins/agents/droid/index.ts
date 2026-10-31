@@ -71,8 +71,6 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
   }
 
   override async initialize(config: Record<string, unknown>): Promise<void> {
-    await super.initialize(config);
-
     const parsed = DroidAgentConfigSchema.safeParse({
       model: config.model,
       reasoningEffort: config.reasoningEffort,
@@ -82,8 +80,10 @@ export class DroidAgentPlugin extends BaseAgentPlugin {
     });
 
     if (!parsed.success) {
-      return;
+      throw new Error(`[droid] Invalid agent options: ${parsed.error.message}`);
     }
+
+    await super.initialize(config);
 
     if (typeof parsed.data.model === 'string' && parsed.data.model.length > 0) {
       this.model = parsed.data.model;
