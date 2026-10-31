@@ -461,6 +461,13 @@ export class ExecutionEngine {
     }
   }
 
+  private async refreshWatchTasks(): Promise<void> {
+    if (this.trackerChangePending && this.taskRefresh) await this.taskRefresh;
+    if (this.shouldStop || this.state.status === 'pausing' || this.state.status === 'paused') return;
+    this.trackerChangePending = false;
+    await this.refreshTasks();
+  }
+
   private async refreshTasksInternal(): Promise<void> {
     if (!this.tracker) {
       return;
@@ -688,7 +695,7 @@ export class ExecutionEngine {
             continue;
           }
           try {
-            await this.refreshTasks();
+            await this.refreshWatchTasks();
           } catch (error) {
             this.emitTaskRefreshWarning(error);
           }
@@ -735,7 +742,7 @@ export class ExecutionEngine {
             continue;
           }
           try {
-            await this.refreshTasks();
+            await this.refreshWatchTasks();
           } catch (error) {
             this.emitTaskRefreshWarning(error);
           }
@@ -1897,9 +1904,6 @@ export class ExecutionEngine {
         this.wakeWatch = done;
       });
       remainingMs -= delayMs;
-    }
-    if (!this.shouldStop && this.state.status !== 'pausing') {
-      this.trackerChangePending = false;
     }
   }
 
