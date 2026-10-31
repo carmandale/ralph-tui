@@ -5,6 +5,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { BeadsChangeFeed } from './change-feed.js';
 import { access, constants } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -241,9 +242,15 @@ export class BeadsTrackerPlugin extends BaseTrackerPlugin {
   private workingDir: string = process.cwd();
   private detectionError: string | undefined;
   private beadsDirResolution: ReturnType<typeof resolveBeadsDir> | undefined;
+  private changeFeed: BeadsChangeFeed | undefined;
+  private changeListeners = new Set<() => void>();
+  private changeFeedDisposed = false;
+  private changeFeedCleanup: Promise<void> = Promise.resolve();
 
   override async initialize(config: Record<string, unknown>): Promise<void> {
+    await this.stopChangeFeed();
     await super.initialize(config);
+    this.changeFeedDisposed = false;
 
     if (typeof config.beadsDir === 'string') {
       this.beadsDir = config.beadsDir;
@@ -335,6 +342,46 @@ export class BeadsTrackerPlugin extends BaseTrackerPlugin {
       return { BEADS_DIR: this.beadsDirResolution.path };
     }
     return undefined;
+  }
+
+  subscribeChanges(listener: () => void): () => Promise<void> {
+    if (this.config.changeFeed !== true || !this.ready || this.changeFeedDisposed) {
+      return async () => {};
+    }
+    const callback = (): void => { try { listener(); } catch { /* Isolate subscribers. */ } };
+    this.changeListeners.add(callback);
+    if (!this.changeFeed) {
+      this.changeFeed = new BeadsChangeFeed({
+        cwd: this.workingDir,
+        env: this.getCommandEnv(),
+        onChange: () => {
+          this.onTrackerChanged();
+          for (const notify of this.changeListeners) notify();
+        },
+      });
+      this.changeFeed.start();
+    }
+    let cleanup: Promise<void> | undefined;
+    return () => cleanup ??= (async () => {
+      this.changeListeners.delete(callback);
+      if (this.changeListeners.size === 0) await this.stopChangeFeed();
+    })();
+  }
+
+  protected onTrackerChanged(): void {}
+
+  private async stopChangeFeed(): Promise<void> {
+    const feed = this.changeFeed;
+    this.changeFeed = undefined;
+    this.changeListeners.clear();
+    if (feed) this.changeFeedCleanup = feed.dispose();
+    await this.changeFeedCleanup;
+  }
+
+  override async dispose(): Promise<void> {
+    this.changeFeedDisposed = true;
+    await this.stopChangeFeed();
+    await super.dispose();
   }
 
   getSetupQuestions(): SetupQuestion[] {

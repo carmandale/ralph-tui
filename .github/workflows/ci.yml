@@ -154,6 +154,10 @@ jobs:
           bun test src/plugins/trackers/builtin/beads/index.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov 2>&1 | tee -a coverage-output.txt
           cp coverage/lcov.info coverage-parts/beads.lcov
 
+          echo "=== Running native bd change-feed tests (isolated real CLI) ===" | tee -a coverage-output.txt
+          bun test src/plugins/trackers/builtin/beads/change-feed.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov 2>&1 | tee -a coverage-output.txt
+          cp coverage/lcov.info coverage-parts/beads-change-feed.lcov
+
           echo "=== Running src/plugins/ (excluding beads-bv, beads-rust, and linear) ===" | tee -a coverage-output.txt
           bun test src/plugins/agents/ src/plugins/trackers/builtin/beads.test.ts --coverage --coverage-reporter=text --coverage-reporter=lcov 2>&1 | tee -a coverage-output.txt || true
           cp coverage/lcov.info coverage-parts/plugins.lcov || true

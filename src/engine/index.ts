@@ -271,6 +271,10 @@ export class ExecutionEngine {
   private activeIterationSettled = true;
   private timedOutIteration: Promise<IterationResult> | null = null;
   private watchingIdle = false;
+  private trackerChangePending = false;
+  private wakeWatch: (() => void) | undefined;
+  private unsubscribeTrackerChanges: (() => Promise<void>) | undefined;
+  private taskRefresh: Promise<void> | undefined;
   /** Track retry attempts per task */
   private retryCountMap: Map<string, number> = new Map();
   /** Track skipped tasks to avoid retrying them */
@@ -447,6 +451,16 @@ export class ExecutionEngine {
    * Call this when the user wants to manually refresh the task list (e.g., 'r' key).
    */
   async refreshTasks(): Promise<void> {
+    if (this.taskRefresh) return this.taskRefresh;
+    this.taskRefresh = this.refreshTasksInternal();
+    try {
+      await this.taskRefresh;
+    } finally {
+      this.taskRefresh = undefined;
+    }
+  }
+
+  private async refreshTasksInternal(): Promise<void> {
     if (!this.tracker) {
       return;
     }
@@ -554,37 +568,46 @@ export class ExecutionEngine {
     this.timedOutIteration = null;
     this.watchingIdle = false;
 
-    // Fetch all tasks including completed for TUI display
-    // Open/in_progress tasks are actionable; completed tasks are for historical view
-    const initialTasks = await this.tracker.getTasks({
-      status: ['open', 'in_progress', 'completed'],
-    });
-
-    this.emit({
-      type: 'engine:started',
-      timestamp: new Date().toISOString(),
-      sessionId: '',
-      totalTasks: this.state.totalTasks, // Only counts open/in_progress
-      tasks: initialTasks,
-    });
-
-    // Warn if sandbox network is disabled but agent requires network
-    if (
-      this.config.sandbox?.enabled &&
-      this.config.sandbox?.network === false &&
-      this.agent!.getSandboxRequirements().requiresNetwork
-    ) {
-      this.emit({
-        type: 'engine:warning',
-        timestamp: new Date().toISOString(),
-        code: 'sandbox-network-conflict',
-        message: `Warning: Agent '${this.config.agent.plugin}' requires network access but --no-network is enabled. LLM API calls will fail.`,
-      });
-    }
-
     try {
+      if (this.config.watch) {
+        this.unsubscribeTrackerChanges = this.tracker.subscribeChanges?.(() => {
+          if (this.shouldStop) return;
+          this.trackerChangePending = true;
+          this.wakeWatch?.();
+        });
+      }
+
+      // Fetch all tasks including completed for TUI display
+      // Open/in_progress tasks are actionable; completed tasks are for historical view
+      const initialTasks = await this.tracker.getTasks({
+        status: ['open', 'in_progress', 'completed'],
+      });
+
+      this.emit({
+        type: 'engine:started',
+        timestamp: new Date().toISOString(),
+        sessionId: '',
+        totalTasks: this.state.totalTasks, // Only counts open/in_progress
+        tasks: initialTasks,
+      });
+
+      // Warn if sandbox network is disabled but agent requires network
+      if (
+        this.config.sandbox?.enabled &&
+        this.config.sandbox?.network === false &&
+        this.agent!.getSandboxRequirements().requiresNetwork
+      ) {
+        this.emit({
+          type: 'engine:warning',
+          timestamp: new Date().toISOString(),
+          code: 'sandbox-network-conflict',
+          message: `Warning: Agent '${this.config.agent.plugin}' requires network access but --no-network is enabled. LLM API calls will fail.`,
+        });
+      }
+
       await this.runLoop();
     } finally {
+      await this.stopTrackerChanges();
       this.state.status = 'idle';
     }
   }
@@ -1630,11 +1653,13 @@ export class ExecutionEngine {
   private async stopInternal(timeoutMs: number): Promise<void> {
     this.shouldStop = true;
     this.state.status = 'stopping';
+    this.wakeWatch?.();
 
     // Interrupt current execution if any
     if (this.currentExecution) {
       this.currentExecution.interrupt();
     }
+    await this.stopTrackerChanges();
 
     const activeIteration = this.activeIteration;
     this.drainTimedOut = !(await this.waitForActiveIteration(timeoutMs));
@@ -1862,11 +1887,27 @@ export class ExecutionEngine {
    */
   private async waitForPollInterval(): Promise<void> {
     let remainingMs = this.config.pollIntervalMs;
-    while (remainingMs > 0 && !this.shouldStop && this.state.status !== 'pausing') {
+    while (remainingMs > 0 && !this.shouldStop && this.state.status !== 'pausing' &&
+      !this.trackerChangePending) {
       const delayMs = Math.min(100, remainingMs);
-      await this.delay(delayMs);
+      await new Promise<void>((resolve) => {
+        const done = (): void => {
+          clearTimeout(timer);
+          this.wakeWatch = undefined;
+          resolve();
+        };
+        const timer = setTimeout(done, delayMs);
+        this.wakeWatch = done;
+      });
       remainingMs -= delayMs;
     }
+    this.trackerChangePending = false;
+  }
+
+  private async stopTrackerChanges(): Promise<void> {
+    const unsubscribe = this.unsubscribeTrackerChanges;
+    this.unsubscribeTrackerChanges = undefined;
+    await unsubscribe?.();
   }
 
   /**

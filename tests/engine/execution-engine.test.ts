@@ -130,6 +130,7 @@ describe('ExecutionEngine', () => {
     if (engine) {
       await engine.dispose();
     }
+    delete mockTrackerInstance.subscribeChanges;
   });
 
   describe('state machine transitions', () => {
@@ -1644,6 +1645,108 @@ describe('ExecutionEngine', () => {
   });
 
   describe('watch mode', () => {
+    const until = async (check: () => boolean): Promise<void> => {
+      const deadline = Date.now() + 3000;
+      while (!check()) {
+        if (Date.now() > deadline) throw new Error('Watch state did not settle');
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+    };
+
+    test('coalesces idle wakeups and retains notifications delivered during refresh', async () => {
+      engine = new ExecutionEngine(createTestConfig({ watch: true, pollIntervalMs: 30_000 }));
+      let notify!: () => void;
+      const unsubscribe = mock(async () => {});
+      mockTrackerInstance.subscribeChanges = (listener) => { notify = listener; return unsubscribe; };
+      (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => []);
+      (mockTrackerInstance.getNextTask as ReturnType<typeof mock>).mockImplementation(async () => undefined);
+      (mockTrackerInstance.isComplete as ReturnType<typeof mock>).mockImplementation(async () => false);
+      engine.on((e) => events.push(e));
+      await engine.initialize();
+      const run = engine.start();
+      await until(() => events.some((e) => e.type === 'engine:waiting'));
+      let reads = 0;
+      let active = 0;
+      let maxActive = 0;
+      (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => {
+        reads++;
+        maxActive = Math.max(maxActive, ++active);
+        if (reads === 1) {
+          notify();
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        active--;
+        return [];
+      });
+      for (let i = 0; i < 50; i++) notify();
+      await until(() => events.filter((e) => e.type === 'tasks:refreshed').length >= 2);
+      expect(reads).toBe(2);
+      expect(maxActive).toBe(1);
+      await engine.stop();
+      await run;
+      notify();
+      await engine.dispose();
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+      expect(reads).toBe(2);
+    });
+
+    test('retains a change delivered during initial baseline and pauses without refreshing', async () => {
+      engine = new ExecutionEngine(createTestConfig({ watch: true, pollIntervalMs: 30_000 }));
+      let notify!: () => void;
+      mockTrackerInstance.subscribeChanges = (listener) => { notify = listener; return async () => {}; };
+      (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => []);
+      (mockTrackerInstance.getNextTask as ReturnType<typeof mock>).mockImplementation(async () => undefined);
+      (mockTrackerInstance.isComplete as ReturnType<typeof mock>).mockImplementation(async () => false);
+      engine.on((e) => events.push(e));
+      await engine.initialize();
+      let reads = 0;
+      (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => {
+        if (++reads === 1) notify();
+        return [];
+      });
+      const run = engine.start();
+      await until(() => events.some((e) => e.type === 'tasks:refreshed'));
+      engine.pause();
+      await until(() => engine.getStatus() === 'paused');
+      const before = reads;
+      notify();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(reads).toBe(before);
+      expect(engine.getStatus()).toBe('paused');
+      engine.resume();
+      await until(() => reads > before);
+      await engine.stop();
+      await run;
+    });
+
+    test('cleans up a subscription if the initial baseline fails', async () => {
+      engine = new ExecutionEngine(createTestConfig({ watch: true }));
+      const unsubscribe = mock(async () => {});
+      mockTrackerInstance.subscribeChanges = () => unsubscribe;
+      (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => []);
+      await engine.initialize();
+      (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => {
+        throw new Error('baseline failed');
+      });
+      await expect(engine.start()).rejects.toThrow('baseline failed');
+      expect(unsubscribe).toHaveBeenCalledTimes(1);
+    });
+
+    test('coalesces overlapping manual task refreshes', async () => {
+      engine = new ExecutionEngine(createTestConfig());
+      (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => []);
+      await engine.initialize();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const getTasks = mock(async () => { await gate; return []; });
+      mockTrackerInstance.getTasks = getTasks;
+      const first = engine.refreshTasks();
+      const second = engine.refreshTasks();
+      expect(getTasks).toHaveBeenCalledTimes(1);
+      release();
+      await Promise.all([first, second]);
+    });
+
     test('reports waiting while idle and running when an iteration starts', async () => {
       engine = new ExecutionEngine(
         createTestConfig({ watch: true, pollIntervalMs: 20, maxIterations: 1 })
@@ -1874,26 +1977,6 @@ describe('ExecutionEngine', () => {
         Promise.resolve(undefined as TrackerTask | undefined)
       );
 
-      const delayCalls: number[] = [];
-      let releasePollDelay!: () => void;
-      let releasePauseDelay!: () => void;
-      const originalDelay = (engine as unknown as {
-        delay: (ms: number) => Promise<void>;
-      }).delay;
-      (engine as unknown as {
-        delay: (ms: number) => Promise<void>;
-      }).delay = (ms: number) => {
-        delayCalls.push(ms);
-        if (delayCalls.length === 1) {
-          return new Promise<void>((resolve) => {
-            releasePollDelay = resolve;
-          });
-        }
-        return new Promise<void>((resolve) => {
-          releasePauseDelay = resolve;
-        });
-      };
-
       await engine.initialize();
       const startPromise = engine.start();
       while (events.every((event) => event.type !== 'engine:waiting')) {
@@ -1901,21 +1984,16 @@ describe('ExecutionEngine', () => {
       }
 
       const getTasksCallsWhileWaiting = getTasksCalls;
+      const pausedAt = Date.now();
       engine.pause();
-      releasePollDelay();
 
       while (events.every((event) => event.type !== 'engine:paused')) {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
 
-      expect(delayCalls).toEqual([100, 100]);
+      expect(Date.now() - pausedAt).toBeLessThan(500);
       expect(getTasksCalls).toBe(getTasksCallsWhileWaiting);
-      (engine as unknown as {
-        delay: (ms: number) => Promise<void>;
-      }).delay = originalDelay;
-      const stopPromise = engine.stop();
-      releasePauseDelay();
-      await stopPromise;
+      await engine.stop();
       await startPromise;
     });
 
