@@ -1732,6 +1732,46 @@ describe('ExecutionEngine', () => {
       expect(unsubscribe).toHaveBeenCalledTimes(1);
     });
 
+    test.each(['throw', 'reject'])('contains unsubscribe %s and allows watch restart', async (failure) => {
+      engine = new ExecutionEngine(createTestConfig({ watch: true, pollIntervalMs: 30_000 }));
+      const unsubscribe = mock((): Promise<void> => {
+        if (failure === 'throw') throw new Error('cleanup failed');
+        return Promise.reject(new Error('cleanup failed'));
+      });
+      mockTrackerInstance.subscribeChanges = () => unsubscribe;
+      mockTrackerInstance.getTasks = mock(async () => []);
+      mockTrackerInstance.isComplete = mock(async () => true);
+      engine.on((event) => events.push(event));
+      await engine.initialize();
+      const run = engine.start();
+      await until(() => engine.getStatus() === 'waiting');
+      await engine.stop();
+      await run;
+      expect(engine.getStatus()).toBe('idle');
+      expect(events.filter((event) => event.type === 'engine:stopped')).toHaveLength(1);
+      const continued = engine.continueExecution();
+      await until(() => engine.getStatus() === 'waiting');
+      await engine.stop();
+      await continued;
+      expect(engine.getStatus()).toBe('idle');
+      expect(events.filter((event) => event.type === 'engine:stopped')).toHaveLength(2);
+      expect(events.filter((event) => event.type === 'engine:warning' &&
+        event.code === 'tracker-cleanup-failed')).toHaveLength(2);
+      await engine.dispose();
+      expect(unsubscribe).toHaveBeenCalledTimes(2);
+    });
+
+    test('retains the original baseline error when subscription cleanup rejects', async () => {
+      engine = new ExecutionEngine(createTestConfig({ watch: true }));
+      mockTrackerInstance.subscribeChanges = () => async () => { throw new Error('cleanup failed'); };
+      mockTrackerInstance.getTasks = mock(async () => []);
+      await engine.initialize();
+      mockTrackerInstance.getTasks = mock(async () => { throw new Error('baseline failed'); });
+      await expect(engine.start()).rejects.toThrow('baseline failed');
+      expect(engine.getStatus()).toBe('idle');
+      await engine.dispose();
+    });
+
     test('coalesces overlapping manual task refreshes', async () => {
       engine = new ExecutionEngine(createTestConfig());
       (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(async () => []);

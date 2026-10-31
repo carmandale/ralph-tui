@@ -1916,7 +1916,16 @@ export class ExecutionEngine {
   private async stopTrackerChanges(): Promise<void> {
     const unsubscribe = this.unsubscribeTrackerChanges;
     this.unsubscribeTrackerChanges = undefined;
-    if (unsubscribe) this.trackerChangesCleanup = unsubscribe();
+    if (unsubscribe) {
+      this.trackerChangesCleanup = Promise.resolve().then(unsubscribe).catch((error: unknown) => {
+        this.emit({
+          type: 'engine:warning',
+          timestamp: new Date().toISOString(),
+          code: 'tracker-cleanup-failed',
+          message: `Tracker change cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      });
+    }
     await this.trackerChangesCleanup;
   }
 
