@@ -177,10 +177,10 @@ async function buildPrompt(
   tracker?: TrackerPlugin
 ): Promise<string> {
   // Load recent progress for context (last 5 iterations)
-  const recentProgress = await getRecentProgressSummary(config.cwd, 5);
+  const recentProgress = await getRecentProgressSummary(config, 5);
 
   // Load codebase patterns from progress.md (if any exist)
-  const codebasePatterns = await getCodebasePatternsForPrompt(config.cwd);
+  const codebasePatterns = await getCodebasePatternsForPrompt(config);
 
   // Get template from tracker plugin (new architecture: templates owned by plugins)
   // Use optional call syntax since not all tracker plugins implement getTemplate
@@ -504,10 +504,10 @@ export class ExecutionEngine {
     const trackerTemplate = this.tracker.getTemplate?.();
 
     // Get recent progress summary for context
-    const recentProgress = await getRecentProgressSummary(this.config.cwd, 5);
+    const recentProgress = await getRecentProgressSummary(this.config, 5);
 
     // Get codebase patterns from progress.md (if any exist)
-    const codebasePatterns = await getCodebasePatternsForPrompt(this.config.cwd);
+    const codebasePatterns = await getCodebasePatternsForPrompt(this.config);
 
     // Get PRD context if the tracker supports it
     const prdContext = await this.tracker.getPrdContext?.();
@@ -1457,7 +1457,8 @@ export class ExecutionEngine {
       // Exit code 0 alone does NOT indicate task completion - an agent may exit
       // cleanly after asking clarification questions or hitting a blocker.
       // See: https://github.com/subsy/ralph-tui/issues/259
-      const taskCompleted = promiseComplete;
+      const taskCompleted =
+        promiseComplete && agentResult.status === 'completed' && !agentResult.interrupted;
 
       // Update tracker if task completed
       // In worker mode (forcedTask set), skip tracker update — the ParallelExecutor

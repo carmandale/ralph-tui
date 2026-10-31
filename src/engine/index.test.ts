@@ -19,6 +19,9 @@ import type { AgentPlugin } from '../plugins/agents/types.js';
 import type { TrackerPlugin, TrackerTask, TaskFilter } from '../plugins/trackers/types.js';
 import type { RalphConfig } from '../config/types.js';
 import { ExecutionEngine } from './index.js';
+import { Worker } from '../parallel/worker.js';
+import { resolveWorkerProgressFile } from '../logs/progress.js';
+import { resolve } from 'node:path';
 
 /**
  * Creates a minimal mock tracker for testing.
@@ -406,6 +409,39 @@ describe('ExecutionEngine', () => {
       expect(completeCalls).toEqual([task.id]);
     });
   });
+
+  test.each(['notes/progress.md', '/tmp/shared-progress.md', '../progress.md', '.ralph-tui/progress.md', '', '   '])
+    ('isolates worker config and prompt instructions from main path %j', async (progressFile) => {
+      const registry = AgentRegistry.getInstance();
+      if (!registry.hasPlugin('engine-test-agent')) registry.registerBuiltin(createMockAgent);
+      const config = createMockConfig();
+      config.progressFile = progressFile;
+      config.promptTemplate = resolve(import.meta.dir, '../plugins/trackers/builtin/json/template.hbs');
+      config.agent = {
+        name: 'engine-test-agent', plugin: 'engine-test-agent', options: { customOption: 'preserved' },
+      };
+      const task = createMockTask();
+      const tracker = createMockTracker([task]);
+      const worktreePath = '/tmp/ralph-isolated-worker-nonexistent';
+      const worker = new Worker({
+        id: 'path-worker', task, cwd: config.cwd, worktreePath, branchName: 'worker-branch',
+      }, 2);
+      await worker.initialize(config, tracker);
+      const engine = (worker as unknown as { engine: ExecutionEngine }).engine;
+      const workerConfig = (engine as unknown as { config: RalphConfig }).config;
+      expect(workerConfig.cwd).toBe(worktreePath);
+      expect(workerConfig.progressFile).toBe(resolveWorkerProgressFile(worktreePath));
+      expect(workerConfig.autoCommit).toBe(true);
+      expect(workerConfig.agent.options).toEqual({ customOption: 'preserved' });
+      const preview = await engine.generatePromptPreview(task.id);
+      expect(preview.success).toBe(true);
+      if (preview.success) {
+        expect(preview.source).toBe(config.promptTemplate);
+        expect(preview.prompt).toContain('APPEND to `.ralph-tui/progress.md`');
+        expect(preview.prompt).toContain('Study `.ralph-tui/progress.md`');
+      }
+      expect(config.progressFile).toBe(progressFile);
+    });
 
   describe('initialize', () => {
     test('uses an injected tracker in normal mode', async () => {

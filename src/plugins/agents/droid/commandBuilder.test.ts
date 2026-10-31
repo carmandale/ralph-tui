@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { buildDroidCommandArgs, getDroidOutputFormat } from './commandBuilder.js';
 import { DroidAgentPlugin } from './index.js';
+import { BaseAgentPlugin } from '../base.js';
 import { DroidAgentConfigSchema } from './schema.js';
 import type { AgentExecuteOptions } from '../types.js';
 import { mkdtemp, writeFile, readFile, chmod, rm } from 'node:fs/promises';
@@ -19,6 +20,10 @@ class TestDroid extends DroidAgentPlugin {
 }
 
 describe('Droid output format contract', () => {
+  test('inherits the base execution lifecycle', () => {
+    expect(DroidAgentPlugin.prototype.execute).toBe(BaseAgentPlugin.prototype.execute);
+  });
+
   test('requests stream-json by default before explicit flags and preserves the prompt', () => {
     expect(buildDroidCommandArgs({ prompt: '--output-format=text', cwd: '/workspace' })).toEqual([
       'exec', '--output-format', 'stream-json', '--cwd', '/workspace', '--output-format=text',

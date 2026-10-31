@@ -759,6 +759,58 @@ describe('ExecutionEngine', () => {
   });
 
   describe('execution result handling', () => {
+    for (const [status, exitCode, interrupted, eligible] of [
+      ['completed', 0, false, true],
+      ['failed', 1, false, false],
+      ['failed', 0, false, false],
+      ['timeout', 0, false, false],
+      ['interrupted', 0, true, false],
+      ['interrupted', 0, false, false],
+      ['completed', 0, true, false],
+    ] as const) {
+      test(`completion eligibility for status=${status}, exit=${exitCode}, interrupted=${interrupted}`, async () => {
+        const cwd = await mkdtemp(join(tmpdir(), 'ralph-completion-outcome-'));
+        const originalExecute = mockAgentInstance.execute;
+        const result = createSuccessfulExecution('Earlier narrative: <promise>COMPLETE</promise>', {
+          status, exitCode, interrupted,
+        });
+        mockAgentInstance.execute = mock(() => ({
+          promise: Promise.resolve(result),
+          interrupt: mock(() => true),
+          isRunning: () => false,
+        })) as AgentPlugin['execute'];
+        config = createTestConfig({ cwd, maxIterations: 1, autoCommit: true });
+        engine = new ExecutionEngine(config);
+        engine.on(event => events.push(event));
+        const task = createTrackerTask({ id: 'task-outcome', title: 'Outcome test' });
+        (mockTrackerInstance.getTasks as ReturnType<typeof mock>).mockImplementation(() => Promise.resolve([task]));
+        (mockTrackerInstance.getNextTask as ReturnType<typeof mock>)
+          .mockImplementationOnce(() => Promise.resolve(task))
+          .mockImplementation(() => Promise.resolve(undefined));
+        (mockTrackerInstance.isComplete as ReturnType<typeof mock>).mockImplementation(() => Promise.resolve(false));
+        const completeBefore = (mockTrackerInstance.completeTask as ReturnType<typeof mock>).mock.calls.length;
+        const autoCommit = spyOn(
+          engine as unknown as { handleAutoCommit: () => Promise<void> },
+          'handleAutoCommit'
+        ).mockResolvedValue(undefined);
+        try {
+          await engine.initialize();
+          await engine.start();
+          const iteration = engine.getState().iterations[0];
+          expect(iteration?.promiseComplete).toBe(true);
+          expect(iteration?.taskCompleted).toBe(eligible);
+          expect(engine.getState().tasksCompleted).toBe(eligible ? 1 : 0);
+          expect((mockTrackerInstance.completeTask as ReturnType<typeof mock>).mock.calls.length - completeBefore).toBe(eligible ? 1 : 0);
+          expect(autoCommit).toHaveBeenCalledTimes(eligible ? 1 : 0);
+          expect(events.some(event => event.type === 'task:completed')).toBe(eligible);
+        } finally {
+          mockAgentInstance.execute = originalExecute;
+          autoCommit.mockRestore();
+          await rm(cwd, { recursive: true, force: true });
+        }
+      });
+    }
+
     test('treats timeout execution as a failed iteration', async () => {
       const originalExecute = mockAgentInstance.execute;
       mockAgentInstance.execute = mock(() => {
