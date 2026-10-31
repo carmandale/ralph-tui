@@ -266,9 +266,14 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
     }
 
     const parser = AmpcodeAgentPlugin.createStreamingJsonlParser(false);
+    let streamedError: string | undefined;
     const emit = (results: JsonlParseResult[]) => {
       for (const result of results) {
         if (result.success) {
+          // The base stdout tail can discard an earlier explicit failure.
+          if (streamedError === undefined && AmpcodeAgentPlugin.isErrorResult(result.message.raw)) {
+            streamedError = AmpcodeAgentPlugin.errorMessage(result.message.raw);
+          }
           options?.onJsonlMessage?.(result.message.raw);
         }
         const events = result.success
@@ -288,11 +293,12 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
       onEnd: (result) => {
         const parsed = AmpcodeAgentPlugin.parseJsonlOutput(result.stdout);
         const failure = parsed.messages.find(({ raw }) => AmpcodeAgentPlugin.isErrorResult(raw));
+        const error = streamedError ?? (failure && AmpcodeAgentPlugin.errorMessage(failure.raw));
         // The engine scans stdout for completion: never expose tool input, hidden
         // content, or malformed protocol lines as assistant narrative.
-        if (failure && result.status === 'completed') {
+        if (error !== undefined && result.status === 'completed') {
           result.status = 'failed';
-          result.error = AmpcodeAgentPlugin.errorMessage(failure.raw);
+          result.error = error;
         }
         result.stdout = result.status === 'completed'
           ? parsed.messages.map(({ raw }) => AmpcodeAgentPlugin.completionText(raw)).join(COMPLETION_BOUNDARY)

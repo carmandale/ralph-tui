@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import createAmpcodeAgent, { AmpcodeAgentPlugin } from '../../src/plugins/agents/builtin/ampcode.js';
 import { SubagentTraceParser } from '../../src/plugins/agents/tracing/parser.js';
-import type { AgentExecuteOptions, AgentExecutionResult } from '../../src/plugins/agents/types.js';
+import type { AgentExecuteOptions, AgentExecutionResult, AgentPlugin } from '../../src/plugins/agents/types.js';
 import type { FormattedSegment } from '../../src/plugins/agents/output-formatting.js';
 
 class TestableAmp extends AmpcodeAgentPlugin {
@@ -133,6 +133,29 @@ describe('Amp CLI contract', () => {
     expect(result.stdout).toBe(complete);
     expect(chunks.join('')).toBe(complete);
   });
+
+  test('shared launch preserves argv ordering, cwd, stdin, and environment filtering', async () => {
+    const captured = join(dir, 'launch.json');
+    const plugin = await fake(`const input = await Bun.stdin.text();
+      await Bun.write(${JSON.stringify(captured)}, JSON.stringify({ input, args: process.argv.slice(2),
+        cwd: process.cwd(), allowed: process.env.AMP_FIXTURE_ALLOWED, blocked: process.env.AMP_FIXTURE_BLOCKED }));`,
+      { mode: 'custom mode', envExclude: ['AMP_FIXTURE_BLOCKED'] });
+    const original = process.env.AMP_FIXTURE_BLOCKED;
+    process.env.AMP_FIXTURE_BLOCKED = 'synthetic-not-a-secret';
+    try {
+      const result = await plugin.execute('prompt with $shell; and "quotes"', undefined, {
+        cwd: dir, flags: ['--fixture', 'one argument'], env: { AMP_FIXTURE_ALLOWED: 'allowed' },
+      }).promise;
+      expect(result.status).toBe('completed');
+      expect(JSON.parse(await readFile(captured, 'utf8'))).toEqual({
+        input: 'prompt with $shell; and "quotes"', cwd: dir, allowed: 'allowed',
+        args: ['--fixture', 'one argument', '--execute', '--stream-json', '--mode', 'custom mode', '--no-notifications'],
+      });
+    } finally {
+      if (original === undefined) delete process.env.AMP_FIXTURE_BLOCKED;
+      else process.env.AMP_FIXTURE_BLOCKED = original;
+    }
+  });
 });
 
 describe('Amp JSONL parsers', () => {
@@ -188,6 +211,35 @@ describe('Amp JSONL parsers', () => {
 });
 
 describe('Amp completion and streamed callbacks', () => {
+  test('engine extraction fallback does not parse normalized narrative a second time', async () => {
+    const narrative = JSON.stringify({ type: 'tool_use', input: { example: complete } });
+    const plugin = await fake(`console.log(${JSON.stringify(jsonl(assistant([text(narrative)])))});`);
+    const agent: AgentPlugin = plugin;
+    const result = await agent.execute('test', undefined, { subagentTracing: true }).promise;
+    const scan = agent.extractAgentText?.(result.stdout, { subagentTracing: true }) ?? result.stdout;
+    expect(result.stdout).toBe(narrative);
+    expect(completionPattern.test(scan)).toBe(true);
+  });
+
+  test('a streamed error survives bounded stdout truncation before later narrative', async () => {
+    const records = jsonl(
+      { type: 'result', subtype: 'error_during_execution', is_error: true, error: 'earlier failure' },
+      assistant([{ type: 'tool_use', name: 'Read', input: { data: 'x'.repeat(2_000_000) } }]),
+      assistant([text(complete)])
+    );
+    const result = await output(records);
+    expect(result.status).toBe('failed');
+    expect(result.error).toBe('earlier failure');
+    expect(result.stdout).toBe('');
+  });
+
+  test('a truncated oversized tool record cannot expose its marker-bearing tail', async () => {
+    const result = await output(jsonl(assistant([
+      { type: 'tool_use', name: 'Read', input: { data: 'x'.repeat(2_000_000) + complete } },
+    ])));
+    expect(result.status).toBe('completed');
+    expect(completionPattern.test(result.stdout)).toBe(false);
+  });
   test.each([
     ['assistant narrative', assistant([text(complete)]), true],
     ['successful result', success(complete), true],
@@ -380,6 +432,29 @@ describe('Amp completion and streamed callbacks', () => {
 });
 
 describe('Amp subprocess lifecycle', () => {
+  test.each([0, 7])('an actual timeout stays ineligible when SIGTERM exits %s after a marker', async (code) => {
+    const plugin = await fake(`process.on('SIGTERM', () => process.exit(${code}));
+      console.log(${JSON.stringify(jsonl(assistant([text(complete)])))});
+      setInterval(() => {}, 1000);`, { timeout: 350 });
+    const ended: AgentExecutionResult[] = [];
+    const handle = plugin.execute('test', undefined, { onEnd: (result) => ended.push(result) });
+    const result = await handle.promise;
+    expect(result.status).toBe('timeout');
+    expect(result.exitCode).toBe(code);
+    expect(result.interrupted).toBe(false);
+    expect(result.stdout).toBe('');
+    expect(ended).toHaveLength(1);
+    expect(handle.isRunning()).toBe(false);
+  });
+
+  test('an earlier narrative marker cannot complete after a nonzero child exit', async () => {
+    const plugin = await fake(`console.log(${JSON.stringify(jsonl(assistant([text(complete)])))}); process.exit(7);`);
+    const result = await plugin.execute('test').promise;
+    expect(result.status).toBe('failed');
+    expect(result.exitCode).toBe(7);
+    expect(result.stdout).toBe('');
+  });
+
   test('nonzero exit captures stderr, preserves failed status and resolves once', async () => {
     const plugin = await fake(`console.error('auth failed'); process.exit(7);`);
     const ended: AgentExecutionResult[] = [];
