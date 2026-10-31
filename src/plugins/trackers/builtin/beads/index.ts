@@ -351,7 +351,7 @@ export class BeadsTrackerPlugin extends BaseTrackerPlugin {
     const callback = (): void => { try { listener(); } catch { /* Isolate subscribers. */ } };
     this.changeListeners.add(callback);
     if (!this.changeFeed) {
-      this.changeFeed = new BeadsChangeFeed({
+      const feed = new BeadsChangeFeed({
         cwd: this.workingDir,
         env: this.getCommandEnv(),
         onChange: () => {
@@ -359,7 +359,10 @@ export class BeadsTrackerPlugin extends BaseTrackerPlugin {
           for (const notify of this.changeListeners) notify();
         },
       });
-      this.changeFeed.start();
+      this.changeFeed = feed;
+      void this.changeFeedCleanup.then(() => {
+        if (this.changeFeed === feed && !this.changeFeedDisposed) feed.start();
+      });
     }
     let cleanup: Promise<void> | undefined;
     return () => cleanup ??= (async () => {
@@ -374,7 +377,9 @@ export class BeadsTrackerPlugin extends BaseTrackerPlugin {
     const feed = this.changeFeed;
     this.changeFeed = undefined;
     this.changeListeners.clear();
-    if (feed) this.changeFeedCleanup = feed.dispose();
+    if (feed) this.changeFeedCleanup = Promise.all([
+      this.changeFeedCleanup, feed.dispose(),
+    ]).then(() => {});
     await this.changeFeedCleanup;
   }
 

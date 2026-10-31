@@ -218,4 +218,25 @@ describe('native bd change feed (real CLI)', () => {
     await plugin.subscribeChanges(() => changes++)();
     expect((await calls()).map((c) => c.args)).toEqual([['--version']]);
   });
+
+  test('native tracker serializes resubscription behind old follower termination', async () => {
+    if (process.platform === 'win32') return;
+    await writeFile(join(cwd, 'bd'), `#!/bin/sh\nexec "${process.execPath}" "${fixture}" "$@"\n`);
+    await chmod(join(cwd, 'bd'), 0o755);
+    process.env.PATH = cwd + delimiter + originalPath;
+    await configure({ stream: { ignoreTerm: true } });
+    plugin = new BeadsTrackerPlugin();
+    await plugin.initialize({ workingDir: cwd, beadsDir: cwd, changeFeed: true });
+    const first = plugin.subscribeChanges(() => {});
+    await until(async () => (await followers()).length === 1);
+    const oldPid = (await followers())[0]!.pid;
+    const cleaning = first();
+    const second = plugin.subscribeChanges(() => {});
+    await Bun.sleep(50);
+    expect(await followers()).toHaveLength(1);
+    await cleaning;
+    expect(() => process.kill(oldPid, 0)).toThrow();
+    await until(async () => (await followers()).length === 2);
+    await second();
+  });
 });
