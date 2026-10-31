@@ -6,7 +6,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { BaseAgentPlugin, findCommandPath, quoteForWindowsShell, shouldUseWindowsShell } from '../base.js';
+import { BaseAgentPlugin, quoteForWindowsShell, shouldUseWindowsShell } from '../base.js';
 import { processAgentEvents, processAgentEventsToSegments, type AgentDisplayEvent } from '../output-formatting.js';
 import type {
   AgentPluginMeta,
@@ -114,33 +114,32 @@ export class AmpcodeAgentPlugin extends BaseAgentPlugin {
    * Detect amp CLI availability.
    */
   override async detect(): Promise<AgentDetectResult> {
-    const command = this.commandPath ?? this.meta.defaultCommand;
+    const resolved = await this.resolveCommandPath();
 
-    const findResult = await findCommandPath(command);
-
-    if (!findResult.found) {
+    if (!resolved) {
       return {
         available: false,
         error: `Ampcode CLI not found in PATH. Install from: https://ampcode.com`,
       };
     }
+    const command = resolved.executablePath;
 
     // Verify the binary works by running --version
-    const versionResult = await this.runVersion(findResult.path);
+    const versionResult = await this.runVersion(command);
 
     if (!versionResult.success) {
       return {
         available: false,
-        executablePath: findResult.path,
+        executablePath: command,
         error: versionResult.error,
       };
     }
 
-    this.commandPath = findResult.path;
+    this.commandPath = command;
     return {
       available: true,
       version: versionResult.version,
-      executablePath: findResult.path,
+      executablePath: command,
     };
   }
 

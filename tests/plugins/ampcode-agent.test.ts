@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import * as childProcess from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import createAmpcodeAgent, { AmpcodeAgentPlugin } from '../../src/plugins/agents/builtin/ampcode.js';
@@ -512,6 +512,41 @@ describe('Amp subprocess lifecycle', () => {
     expect(await plugin.detect()).toMatchObject({ available: true, executablePath: process.execPath });
     const missing = await fake('', { command: join(dir, 'does-not-exist') });
     expect(await missing.detect()).toMatchObject({ available: false });
+  });
+
+  test.skipIf(process.platform === 'win32')('blank command overrides detect and execute Amp from PATH', async () => {
+    const executable = join(dir, 'amp');
+    const which = Bun.which('which');
+    expect(which).not.toBeNull();
+    await symlink(which!, join(dir, 'which'));
+    await writeFile(executable, `#!${process.execPath}\nif (process.argv.includes('--version')) {
+      console.log('amp 1.2.3'); process.exit(0);
+    }
+    const input = await Bun.stdin.text();
+    console.log(JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: input }] } }));\n`);
+    await chmod(executable, 0o755);
+    const originalPath = process.env.PATH;
+    process.env.PATH = dir;
+    try {
+      for (const command of ['', '  ']) {
+        const plugin = new TestableAmp();
+        plugins.push(plugin);
+        await plugin.initialize({ command });
+        expect(await plugin.detect()).toEqual({ available: true, version: '1.2.3', executablePath: executable });
+        const result = await plugin.execute('literal PATH prompt').promise;
+        expect(result.status).toBe('completed');
+        expect(result.stdout).toBe('literal PATH prompt');
+      }
+      await rm(executable);
+      const missing = new TestableAmp();
+      plugins.push(missing);
+      await missing.initialize({ command: '' });
+      expect(await missing.detect()).toEqual({ available: false,
+        error: 'Ampcode CLI not found in PATH. Install from: https://ampcode.com' });
+    } finally {
+      if (originalPath === undefined) delete process.env.PATH;
+      else process.env.PATH = originalPath;
+    }
   });
 
   test.skipIf(process.platform === 'win32')('detect reports CLI errors and kills a hung --version process', async () => {
