@@ -58,7 +58,11 @@ describe('Droid launch invocation', () => {
       if (currentPlatform === 'win32') {
         expect(invocation.command).toBe('/opt/agent path/droid');
         expect(invocation.shell).toBe(true);
-        expect(invocation.args.slice(0, 5)).toEqual(['exec', '--default', "it's", '--extra', 'a b']);
+        expect(invocation.args).toEqual([
+          'exec', '--output-format', 'stream-json', '--default', "it's", '--extra', 'a b',
+          '--model', 'model', '--skip-permissions-unsafe', '--cwd', "/project's dir",
+          "line'\\\n\r\t$(touch sentinel)",
+        ]);
         expect(invocation.args.at(-1)).toBe("line'\\\n\r\t$(touch sentinel)");
       } else {
         expect(invocation.command).toBe('script');
@@ -67,7 +71,7 @@ describe('Droid launch invocation', () => {
         expect(invocation.args).toEqual(currentPlatform === 'darwin'
           ? ['-q', '/dev/null', 'sh', '-c', shellCommand]
           : ['-q', '-c', shellCommand, '/dev/null']);
-        expect(shellCommand).toStartWith("stty -echo 2>/dev/null; cd '/project'\\''s dir' && '/opt/agent path/droid' 'exec' '--default' 'it'\\''s' '--extra' 'a b'");
+        expect(shellCommand).toStartWith("stty -echo 2>/dev/null; cd '/project'\\''s dir' && '/opt/agent path/droid' 'exec' '--output-format' 'stream-json' '--default' 'it'\\''s' '--extra' 'a b'");
         expect(shellCommand).toEndWith("$'line\\'\\\\\\n\\r\\t$(touch sentinel)'");
       }
     });

@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -20,6 +20,14 @@ describe('parallel run with tracked custom progress', () => {
       expect(clean.content.split(`UNIQUE-${id}`)).toHaveLength(2);
     }
     expect(clean.progressCommits).toBe('1');
+    expect(clean.tasks.every((task: { passes: boolean }) => task.passes)).toBe(true);
+    expect(clean.executions).toHaveLength(3);
+    for (const execution of clean.executions) {
+      expect(execution.args).toEqual([
+        '--print', '--verbose', '--output-format', 'stream-json', '--dangerously-skip-permissions',
+      ]);
+      expect(execution.exitCode).toBe(0);
+    }
 
     const dirty = await runFixture({ reset, dirty: true });
     expect(dirty.exitCode).toBe(1);
@@ -46,10 +54,25 @@ async function runFixture({ reset, dirty = false }: { reset: boolean; dirty?: bo
     await mkdir(join(cwd, '.ralph-tui'), { recursive: true });
     await mkdir(join(cwd, 'notes'));
     const command = join(root, 'fake-agent');
+    const childCommand = join(root, 'fake-agent-child');
     await writeFile(command, `#!${process.execPath}
+import { writeFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (args.includes('--version')) { console.log('local-fake 1.0'); process.exit(0); }
+const child = Bun.spawn([process.execPath, ${JSON.stringify(childCommand)}, ...args], {
+  stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
+});
+const exitCode = await child.exited;
+writeFileSync(${JSON.stringify(root)} + '/execution-' + process.pid + '.json', JSON.stringify({ args, exitCode }));
+process.exit(exitCode);
+`, { mode: 0o755 });
+    await writeFile(childCommand, `#!${process.execPath}
 import { readFileSync, appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 if (process.argv.includes('--version')) { console.log('local-fake 1.0'); process.exit(0); }
+if (process.argv[process.argv.indexOf('--output-format') + 1] !== 'stream-json') {
+  throw new Error('Fixture requires the requested structured output format');
+}
 const prompt = readFileSync(0, 'utf8');
 const id = prompt.match(/## Your Task: ([^ ]+)/)[1];
 const target = prompt.match(/APPEND to \x60([^\x60]+)\x60/)[1];
@@ -57,7 +80,9 @@ if (target !== '.ralph-tui/progress.md') throw new Error('Worker progress must b
 mkdirSync(dirname(target), { recursive: true });
 appendFileSync(target, '\\nUNIQUE-' + id + '\\n');
 writeFileSync('source-' + id + '.txt', 'implemented');
-console.log('<promise>COMPLETE</promise>');
+console.log(JSON.stringify({ type: 'assistant', message: { content: [
+  { type: 'text', text: '<promise>COMPLETE</promise>' },
+] } }));
 `, { mode: 0o755 });
     await writeFile(join(cwd, '.ralph-tui/config.toml'), `agent = "claude"
 command = ${JSON.stringify(command)}
@@ -90,6 +115,12 @@ iterationDelay = 0
     return {
       exitCode, output: stdout + stderr,
       content: await readFile(join(cwd, 'notes/progress.md'), 'utf-8'),
+      tasks: JSON.parse(await readFile(join(cwd, 'prd.json'), 'utf-8')).userStories,
+      executions: await Promise.all((await readdir(root))
+        .filter((file) => file.startsWith('execution-') && file.endsWith('.json'))
+        .map(async (file) => JSON.parse(await readFile(join(root, file), 'utf-8')) as {
+          args: string[]; exitCode: number;
+        })),
       progressCommits: git('rev-list', '--all', '--count', 'HEAD', '--', 'notes/progress.md'),
     };
   } finally {

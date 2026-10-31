@@ -206,7 +206,10 @@ console.log(JSON.stringify({ args: process.argv.slice(2), cwd: process.cwd(),
         UNRELATED_API_KEY: 'unrelated-test-key',
       });
       const captured = JSON.parse(result.stdout.trim());
-      expect(captured.args.slice(0, 3)).toEqual(['exec', '--default-flag', '--runtime-flag']);
+      expect(captured.args).toEqual([
+        'exec', '--output-format', 'stream-json', '--default-flag', '--runtime-flag',
+        '--skip-permissions-unsafe', '--cwd', tempDir, prompt,
+      ]);
       expect(captured.args.at(-1)).toBe(prompt);
       expect(captured.args.slice(-3, -1)).toEqual(['--cwd', tempDir]);
       expect(captured.cwd).toBe(tempDir);
