@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -21,6 +21,13 @@ describe('parallel run with tracked custom progress', () => {
     }
     expect(clean.progressCommits).toBe('1');
     expect(clean.tasks.every((task: { passes: boolean }) => task.passes)).toBe(true);
+    expect(clean.executions).toHaveLength(3);
+    for (const execution of clean.executions) {
+      expect(execution.args).toEqual([
+        '--print', '--verbose', '--output-format', 'stream-json', '--dangerously-skip-permissions',
+      ]);
+      expect(execution.exitCode).toBe(0);
+    }
 
     const dirty = await runFixture({ reset, dirty: true });
     expect(dirty.exitCode).toBe(1);
@@ -47,7 +54,19 @@ async function runFixture({ reset, dirty = false }: { reset: boolean; dirty?: bo
     await mkdir(join(cwd, '.ralph-tui'), { recursive: true });
     await mkdir(join(cwd, 'notes'));
     const command = join(root, 'fake-agent');
+    const childCommand = join(root, 'fake-agent-child');
     await writeFile(command, `#!${process.execPath}
+import { writeFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (args.includes('--version')) { console.log('local-fake 1.0'); process.exit(0); }
+const child = Bun.spawn([process.execPath, ${JSON.stringify(childCommand)}, ...args], {
+  stdin: 'inherit', stdout: 'inherit', stderr: 'inherit',
+});
+const exitCode = await child.exited;
+writeFileSync(${JSON.stringify(root)} + '/execution-' + process.pid + '.json', JSON.stringify({ args, exitCode }));
+process.exit(exitCode);
+`, { mode: 0o755 });
+    await writeFile(childCommand, `#!${process.execPath}
 import { readFileSync, appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 if (process.argv.includes('--version')) { console.log('local-fake 1.0'); process.exit(0); }
@@ -97,6 +116,11 @@ iterationDelay = 0
       exitCode, output: stdout + stderr,
       content: await readFile(join(cwd, 'notes/progress.md'), 'utf-8'),
       tasks: JSON.parse(await readFile(join(cwd, 'prd.json'), 'utf-8')).userStories,
+      executions: await Promise.all((await readdir(root))
+        .filter((file) => file.startsWith('execution-') && file.endsWith('.json'))
+        .map(async (file) => JSON.parse(await readFile(join(root, file), 'utf-8')) as {
+          args: string[]; exitCode: number;
+        })),
       progressCommits: git('rev-list', '--all', '--count', 'HEAD', '--', 'notes/progress.md'),
     };
   } finally {
